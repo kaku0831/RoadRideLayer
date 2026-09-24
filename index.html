@@ -825,6 +825,21 @@ input[type="file"] {
   max-width: 100%;
 }
 
+/* Android / Chrome: keep file inputs in the document flow without display:none/hidden.
+   showPicker() is used from the actual button gesture, with click() as fallback. */
+.native-file-input {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 .settings-grid {
   display: flex;
   flex-wrap: wrap;
@@ -3718,8 +3733,8 @@ button:disabled,
     </div>
   </div>
 
-  <input type="file" id="videoFile" accept="video/*" multiple hidden>
-  <input type="file" id="fitFile" accept=".fit" hidden>
+  <input type="file" id="videoFile" class="native-file-input" accept="video/*" multiple>
+  <input type="file" id="fitFile" class="native-file-input" accept=".fit,application/octet-stream">
 </div>
 
 <div class="video-clip-modal" id="videoClipModal" aria-hidden="true">
@@ -6049,10 +6064,25 @@ function commitVideoClipDraft() {
   status.textContent = `${videoClips.length}本の動画クリップを反映しました。動画ごとの同期設定を保持しています。`;
 }
 
-videoSelectButton?.addEventListener("click", () => videoFileInput.click());
+function openNativeFilePicker(input) {
+  if (!input) return;
+
+  try {
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+      return;
+    }
+  } catch (error) {
+    console.warn("showPicker() failed; falling back to click()", error);
+  }
+
+  input.click();
+}
+
+videoSelectButton?.addEventListener("click", () => openNativeFilePicker(videoFileInput));
 videoClipEditButton?.addEventListener("click", openVideoClipEditor);
-videoClipEditorAdd?.addEventListener("click", () => videoFileInput.click());
-fitFileSelectButton?.addEventListener("click", () => fitFileInput.click());
+videoClipEditorAdd?.addEventListener("click", () => openNativeFilePicker(videoFileInput));
+fitFileSelectButton?.addEventListener("click", () => openNativeFilePicker(fitFileInput));
 videoClipEditorCancel?.addEventListener("click", () => closeVideoClipEditor());
 videoClipEditorOk?.addEventListener("click", commitVideoClipDraft);
 
