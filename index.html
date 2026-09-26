@@ -5121,7 +5121,16 @@ function updateVideoDisplaySize() {
 
   videoContainer.style.width = Math.round(width) + "px";
   videoContainer.style.height = Math.round(height) + "px";
+  // 右側のロゴ・MAP・気温は、プレビュー幅に合わせて縮尺を調整する。
+  // レイアウト値は基準幅1200pxのまま保持するため、書き出し解像度や
+  // タブレットの向きによって動画内での相対サイズが変わらない。
+  if (typeof applyLayerLayout === "function") applyLayerLayout();
   resizePowerCanvas();
+}
+
+function getRightLayerResponsiveScale() {
+  const width = videoContainer?.getBoundingClientRect().width || 1200;
+  return Math.max(0.25, Math.min(1, width / 1200));
 }
 
 // 端末の向き変更・画面サイズ変更にも追従する。
@@ -12482,15 +12491,17 @@ function applyLayerLayout() {
     if (!data) return;
 
     if (key === "logo") {
+      const responsiveScale = getRightLayerResponsiveScale();
       layer.style.left = (data.left ?? 35) + "%";
       layer.style.top = (data.top ?? 5) + "%";
-      layer.style.width = (data.width ?? 260) + "px";
+      layer.style.width = ((data.width ?? 260) * responsiveScale) + "px";
       layer.style.height = "auto";
     } else if (key === "map") {
+      const responsiveScale = getRightLayerResponsiveScale();
       layer.style.left = (data.left ?? 68) + "%";
       layer.style.top = (data.top ?? 5) + "%";
-      layer.style.width = (data.width ?? 260) + "px";
-      layer.style.height = (data.height ?? 195) + "px";
+      layer.style.width = ((data.width ?? 260) * responsiveScale) + "px";
+      layer.style.height = ((data.height ?? 195) * responsiveScale) + "px";
       // MAPの透明度はMAP本体とラベルだけに適用し、操作パネルは薄くしない。
       const restoredMapOpacity = data.opacity ?? 0.70;
       layer.style.opacity = "1";
@@ -12544,13 +12555,15 @@ function applyLayerLayout() {
           : (Number.isFinite(data.left) ? data.left : 81.2);
         data.left = temperatureLeft;
         layer.style.left = Math.max(0, Math.min(92, temperatureLeft)) + "%";
+        layer.style.fontSize = ((data.fontSize ?? 24) * getRightLayerResponsiveScale()) + "px";
       } else if (Number.isFinite(data.leftPx)) {
         layer.style.left = data.leftPx + "px";
+        layer.style.fontSize = (data.fontSize ?? 24) + "px";
       } else {
         layer.style.left = (data.left ?? 2) + "%";
+        layer.style.fontSize = (data.fontSize ?? 24) + "px";
       }
       layer.style.top = (data.top ?? 4) + "%";
-      layer.style.fontSize = (data.fontSize ?? 24) + "px";
     }
   });
 
@@ -12781,7 +12794,8 @@ function beginLayerInteraction(event, layer, mode) {
     startTop: layerRect.top - containerRect.top,
     startWidth: layerRect.width,
     startHeight: layerRect.height,
-    startFontSize: parseFloat(getComputedStyle(layer).fontSize) || 24,
+    startFontSize: (parseFloat(getComputedStyle(layer).fontSize) || 24) /
+      (key === "temperature" ? getRightLayerResponsiveScale() : 1),
     resizeDir,
     interactionLayers: starts,
     verticalLocked: event.shiftKey
@@ -12813,17 +12827,19 @@ function updateLayerInteraction(event) {
     });
   } else {
     if (state.key === "logo") {
-      const minWidth = 100;
+      const responsiveScale = getRightLayerResponsiveScale();
+      const minWidth = 100 * responsiveScale;
       const maxWidth = Math.max(minWidth, cw);
       const newWidth = Math.max(
         minWidth,
         Math.min(maxWidth, state.startWidth + dx)
       );
-      layerLayout.logo.width = newWidth;
+      layerLayout.logo.width = newWidth / responsiveScale;
       state.layer.style.width = newWidth + "px";
       state.layer.style.height = "auto";
     } else if (state.key === "map") {
-      const minWidth = 140, minHeight = 100;
+      const responsiveScale = getRightLayerResponsiveScale();
+      const minWidth = 140 * responsiveScale, minHeight = 100 * responsiveScale;
       const dir = state.resizeDir || "se";
       let left = state.startLeft, top = state.startTop;
       let right = state.startLeft + state.startWidth;
@@ -12853,8 +12869,8 @@ function updateLayerInteraction(event) {
 
       layerLayout.map.left = left/cw*100;
       layerLayout.map.top = top/ch*100;
-      layerLayout.map.width = w;
-      layerLayout.map.height = h;
+      layerLayout.map.width = w / responsiveScale;
+      layerLayout.map.height = h / responsiveScale;
 
       state.layer.style.left = layerLayout.map.left+"%";
       state.layer.style.top = layerLayout.map.top+"%";
@@ -12946,7 +12962,8 @@ function updateLayerInteraction(event) {
       const scale = Math.max(0.5, Math.min(3, 1 + dx / Math.max(120, state.startWidth)));
       const size = Math.max(12, Math.min(100, state.startFontSize * scale));
       layerLayout[state.key].fontSize = size;
-      state.layer.style.fontSize = size + "px";
+      state.layer.style.fontSize = (size *
+        (state.key === "temperature" ? getRightLayerResponsiveScale() : 1)) + "px";
     }
   }
 
