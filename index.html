@@ -12532,19 +12532,24 @@ function applyLayerLayout() {
       }
 
     } else if (key === "powerGraph") {
+      const graphScale = getRightLayerResponsiveScale();
       layer.style.left = Number.isFinite(data.left) ? data.left + "%" : "auto";
       layer.style.right = Number.isFinite(data.left) ? "auto" : (data.right ?? 2) + "%";
       layer.style.top = Number.isFinite(data.top) ? data.top + "%" : "auto";
       layer.style.bottom = Number.isFinite(data.top) ? "auto" : (data.bottom ?? 10) + "%";
       layer.style.width = (data.width ?? 50) + "%";
-      layer.style.height = (data.height ?? 235) + "px";
+      // 高さだけが固定pxだと、縦持ちで縮小された動画に対して
+      // グラフが縦長になりすぎるため、プレビュー幅に比例させる。
+      layer.style.height = ((data.height ?? 125) * graphScale) + "px";
     } else if (key === "combinedProfileGraph") {
+      const graphScale = getRightLayerResponsiveScale();
       layer.style.left = (data.left ?? 20) + "%";
       layer.style.right = "auto";
       layer.style.top = (data.top ?? 68) + "%";
       layer.style.bottom = "auto";
       layer.style.width = (data.width ?? 60) + "%";
-      layer.style.height = (data.height ?? 180) + "px";
+      // 標高＋パワーグラフもパワーグラフと同じ縮尺で追従させる。
+      layer.style.height = ((data.height ?? 112) * graphScale) + "px";
     } else {
       if (key === "temperature") {
         // 気温はMAPの左端と同じX座標に合わせる。
