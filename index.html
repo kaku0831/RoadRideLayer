@@ -3562,6 +3562,20 @@ button:disabled,
   .export-option-grid.four,.export-option-grid.five,.export-option-grid.six{grid-template-columns:1fr;}
   .export-bottom-bar{align-items:stretch;flex-direction:column;}
 }
+
+.export-option-card:disabled,
+.export-option-card.codec-unavailable{
+  opacity:.42 !important;
+  cursor:not-allowed !important;
+  filter:grayscale(.65);
+  box-shadow:none !important;
+}
+.export-option-card:disabled:hover,
+.export-option-card.codec-unavailable:hover{
+  transform:none !important;
+  border-color:#3a3a3a !important;
+  background:#242424 !important;
+}
 </style>
 
 
@@ -4278,11 +4292,11 @@ button:disabled,
 
     <div class="export-option-title">動画コーデック</div>
     <div class="export-option-grid">
-      <button type="button" class="export-option-card active" data-export-key="codec" data-export-value="h264">
+      <button type="button" class="export-option-card" data-export-key="codec" data-export-value="h264">
         <span class="export-option-main">H.264（互換性重視）</span>
         <span class="export-option-sub">幅広い端末・SNSで再生しやすい形式</span>
       </button>
-      <button type="button" class="export-option-card" data-export-key="codec" data-export-value="h265">
+      <button type="button" class="export-option-card active" data-export-key="codec" data-export-value="h265">
         <span class="export-option-main">H.265（高効率・高圧縮）</span>
         <span class="export-option-sub">同画質でファイルサイズを抑えやすい形式</span>
       </button>
@@ -13837,7 +13851,7 @@ window.addEventListener("resize", () => {
 
   const state = {
     preset: "youtube1440",
-    codec: "h264",
+    codec: "h265",
     resolution: "1440",
     bitrate: "20",
     fps: "30"
@@ -13855,6 +13869,20 @@ window.addEventListener("resize", () => {
 
   const presetCards = [...panel.querySelectorAll("[data-export-preset]")];
   const optionCards = [...panel.querySelectorAll("[data-export-key]")];
+
+  // AndroidタブレットではH.264が実エンコード非対応の環境があるため、
+  // 選択肢は表示したまま無効化し、H.265を使用する。
+  const h264Card = optionCards.find(card =>
+    card.dataset.exportKey === "codec" && card.dataset.exportValue === "h264"
+  );
+  const isAndroid = /Android/i.test(navigator.userAgent || "");
+  if (h264Card && isAndroid) {
+    h264Card.disabled = true;
+    h264Card.setAttribute("aria-disabled", "true");
+    h264Card.title = "このAndroid端末ではH.264書き出しに対応していないため、H.265を使用してください。";
+    h264Card.classList.add("codec-unavailable");
+    if (state.codec === "h264") setActiveOption("codec", "h265");
+  }
 
   function formatSize(gigabytes) {
     if (!Number.isFinite(gigabytes) || gigabytes <= 0) return "--";
@@ -14009,6 +14037,8 @@ window.addEventListener("resize", () => {
       state.preset = preset;
       presetCards.forEach(item => item.classList.toggle("active", item === card));
 
+      // すべての標準プリセットはH.265を既定コーデックにする。
+      setActiveOption("codec", "h265");
       setActiveOption("resolution", values.resolution);
       setActiveOption("bitrate", values.bitrate);
       setActiveOption("fps", values.fps);
@@ -14951,7 +14981,7 @@ window.addEventListener("resize", () => {
           });
 
       videoSource = new MB.CanvasSource(canvas, {
-        codec: "avc",
+        codec: getExportValueSafe("codec", "h265") === "h265" ? "hevc" : "avc",
         bitrate: Math.round(bitrateMbps * 1000000),
         latencyMode: "quality",
         hardwareAcceleration: "prefer-hardware"
@@ -15599,7 +15629,7 @@ window.addEventListener("resize", () => {
           });
       const bitrateMbps = Math.max(1, Number(getActiveExportValue("bitrate", "20")) || 20);
       videoSource = new MB.CanvasSource(canvas, {
-        codec: "avc",
+        codec: getActiveExportValue("codec", "h265") === "h265" ? "hevc" : "avc",
         bitrate: Math.round(bitrateMbps * 1000000),
         latencyMode: "quality",
         hardwareAcceleration: "no-preference"
