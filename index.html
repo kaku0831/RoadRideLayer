@@ -5180,16 +5180,102 @@ function formatVideoClipDuration(seconds) {
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
-const videoClipMp4DateCache = new WeakMap();
-const videoClipMp4DateReadPromises = new WeakMap();
-const MP4_EPOCH_OFFSET_SECONDS = 2082844800;
+// MP4内部の日時（QuickTime/MP4 mvhd.creation_time）を保持する。
+// ファイル全体は読み込まず、MP4ボックスのヘッダーと日時フィールドだけを読む。
+const videoClipEmbeddedDateCache = new WeakMap();
+const MP4_TO_UNIX_EPOCH_SECONDS = 2082844800;
+
+async function readMp4EmbeddedCreationDate(file) {
+  if (!file || typeof file.slice !== "function") return null;
+  if (!/\.(?:mp4|m4v|mov)$/i.test(String(file.name || ""))) return null;
+  if (videoClipEmbeddedDateCache.has(file)) return videoClipEmbeddedDateCache.get(file);
+
+  const promise = (async () => {
+    try {
+      const fileSize = Number(file.size) || 0;
+      if (fileSize < 16) return null;
+
+      async function readBoxHeader(offset, limit) {
+        if (offset + 8 > limit) return null;
+        const bytes = await file.slice(offset, Math.min(offset + 16, limit)).arrayBuffer();
+        const view = new DataView(bytes);
+        let size = view.getUint32(0, false);
+        const type = String.fromCharCode(view.getUint8(4), view.getUint8(5), view.getUint8(6), view.getUint8(7));
+        let headerSize = 8;
+        if (size === 1) {
+          if (bytes.byteLength < 16) return null;
+          const largeSize = view.getBigUint64(8, false);
+          if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+          size = Number(largeSize);
+          headerSize = 16;
+        } else if (size === 0) {
+          size = limit - offset;
+        }
+        if (!Number.isFinite(size) || size < headerSize || offset + size > limit) return null;
+        return { type, dataOffset: offset + headerSize, end: offset + size };
+      }
+
+      async function findMvhd(start, end) {
+        let offset = start;
+        while (offset + 8 <= end) {
+          const box = await readBoxHeader(offset, end);
+          if (!box) return null;
+          if (box.type === "mvhd") {
+            const bytes = await file.slice(box.dataOffset, Math.min(box.dataOffset + 16, box.end)).arrayBuffer();
+            if (bytes.byteLength < 8) return null;
+            const view = new DataView(bytes);
+            const version = view.getUint8(0);
+            let creationSeconds;
+            if (version === 1) {
+              if (bytes.byteLength < 12) return null;
+              const value = view.getBigUint64(4, false);
+              if (value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+              creationSeconds = Number(value);
+            } else if (version === 0) {
+              creationSeconds = view.getUint32(4, false);
+            } else {
+              return null;
+            }
+            if (!creationSeconds) return null;
+            const unixMs = (creationSeconds - MP4_TO_UNIX_EPOCH_SECONDS) * 1000;
+            const date = new Date(unixMs);
+            if (!Number.isFinite(unixMs) || Number.isNaN(date.getTime())) return null;
+            const year = date.getUTCFullYear();
+            return year >= 2000 && year <= 2100 ? date : null;
+          }
+          offset = box.end;
+        }
+        return null;
+      }
+
+      // moovはファイル末尾にある場合もあるため、トップレベルボックスを走査する。
+      let offset = 0;
+      while (offset + 8 <= fileSize) {
+        const box = await readBoxHeader(offset, fileSize);
+        if (!box) break;
+        if (box.type === "moov") {
+          const date = await findMvhd(box.dataOffset, box.end);
+          if (date) return date;
+        }
+        offset = box.end;
+      }
+    } catch (error) {
+      // 読み取れない場合は、ファイル名・更新日時へフォールバック。
+    }
+    return null;
+  })();
+
+  videoClipEmbeddedDateCache.set(file, promise);
+  const result = await promise;
+  videoClipEmbeddedDateCache.set(file, result);
+  return result;
+}
 
 function getVideoClipShootingDate(file) {
   if (!file) return null;
 
-  // MP4内部の作成日時を最優先。DJIのファイル名日時は次点。
-  const embeddedDate = videoClipMp4DateCache.get(file);
-  if (embeddedDate instanceof Date && Number.isFinite(embeddedDate.getTime())) return embeddedDate;
+  const embeddedDate = videoClipEmbeddedDateCache.get(file);
+  if (embeddedDate instanceof Date && !Number.isNaN(embeddedDate.getTime())) return embeddedDate;
 
   const match = String(file.name || "").match(/(?:DJI[_-]?)(\d{14})/i);
   if (match) {
@@ -5201,7 +5287,7 @@ function getVideoClipShootingDate(file) {
     const mi = Number(digits.slice(10, 12));
     const sec = Number(digits.slice(12, 14));
     const date = new Date(y, mo - 1, d, h, mi, sec);
-    if (!Number.isNaN(date.getTime()) && date.getFullYear() === y && date.getMonth() === mo - 1 && date.getDate() === d) return date;
+    if (!Number.isNaN(date.getTime())) return date;
   }
 
   if (Number.isFinite(file.lastModified)) {
@@ -5210,134 +5296,6 @@ function getVideoClipShootingDate(file) {
   }
 
   return null;
-}
-
-async function readMp4CreationDate(file) {
-  if (!file || typeof file.slice !== "function") return null;
-  if (videoClipMp4DateReadPromises.has(file)) return videoClipMp4DateReadPromises.get(file);
-
-  const readPromise = (async () => {
-    try {
-      // MP4のトップレベルboxを走査し、mdat本体は読み込まずmoovだけを探す。
-      let offset = 0;
-      const fileSize = file.size;
-      let moovStart = -1;
-      let moovSize = 0;
-      let safety = 0;
-
-      while (offset + 8 <= fileSize && safety++ < 10000) {
-        const head = await file.slice(offset, Math.min(fileSize, offset + 16)).arrayBuffer();
-        if (head.byteLength < 8) break;
-        const view = new DataView(head);
-        let boxSize = view.getUint32(0, false);
-        const boxType = String.fromCharCode(view.getUint8(4), view.getUint8(5), view.getUint8(6), view.getUint8(7));
-        let headerSize = 8;
-        if (boxSize === 1) {
-          if (head.byteLength < 16) break;
-          const largeSize = view.getBigUint64(8, false);
-          if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) break;
-          boxSize = Number(largeSize);
-          headerSize = 16;
-        } else if (boxSize === 0) {
-          boxSize = fileSize - offset;
-        }
-        if (!Number.isFinite(boxSize) || boxSize < headerSize || offset + boxSize > fileSize) break;
-        if (boxType === "moov") {
-          moovStart = offset + headerSize;
-          moovSize = boxSize - headerSize;
-          break;
-        }
-        offset += boxSize;
-      }
-
-      if (moovStart < 0 || moovSize < 8) return null;
-
-      // moov直下のmvhdだけを読む。巨大なmoov全体はメモリに載せない。
-      let childOffset = moovStart;
-      const moovEnd = moovStart + moovSize;
-      safety = 0;
-      while (childOffset + 8 <= moovEnd && safety++ < 10000) {
-        const head = await file.slice(childOffset, Math.min(moovEnd, childOffset + 16)).arrayBuffer();
-        if (head.byteLength < 8) break;
-        const view = new DataView(head);
-        let boxSize = view.getUint32(0, false);
-        const boxType = String.fromCharCode(view.getUint8(4), view.getUint8(5), view.getUint8(6), view.getUint8(7));
-        let headerSize = 8;
-        if (boxSize === 1) {
-          if (head.byteLength < 16) break;
-          const largeSize = view.getBigUint64(8, false);
-          if (largeSize > BigInt(Number.MAX_SAFE_INTEGER)) break;
-          boxSize = Number(largeSize);
-          headerSize = 16;
-        } else if (boxSize === 0) {
-          boxSize = moovEnd - childOffset;
-        }
-        if (!Number.isFinite(boxSize) || boxSize < headerSize || childOffset + boxSize > moovEnd) break;
-
-        if (boxType === "mvhd") {
-          const data = await file.slice(childOffset + headerSize, Math.min(childOffset + boxSize, childOffset + headerSize + 32)).arrayBuffer();
-          if (data.byteLength < 16) return null;
-          const mvhd = new DataView(data);
-          const version = mvhd.getUint8(0);
-          let creationSeconds;
-          if (version === 1) {
-            if (data.byteLength < 20) return null;
-            const value = mvhd.getBigUint64(4, false);
-            if (value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
-            creationSeconds = Number(value);
-          } else if (version === 0) {
-            creationSeconds = mvhd.getUint32(4, false);
-          } else {
-            return null;
-          }
-          if (!creationSeconds || creationSeconds <= MP4_EPOCH_OFFSET_SECONDS) return null;
-          const date = new Date((creationSeconds - MP4_EPOCH_OFFSET_SECONDS) * 1000);
-          const year = date.getUTCFullYear();
-          if (!Number.isFinite(date.getTime()) || year < 2000 || year > 2100) return null;
-          return date;
-        }
-        childOffset += boxSize;
-      }
-    } catch (error) {
-      // 対応外・破損・読み取り不可の動画は従来の日時判定へフォールバック。
-    }
-    return null;
-  })();
-
-  videoClipMp4DateReadPromises.set(file, readPromise);
-  return readPromise;
-}
-
-function applyResolvedVideoClipDate(file, date) {
-  if (!file || !(date instanceof Date) || !Number.isFinite(date.getTime())) return;
-  videoClipMp4DateCache.set(file, date);
-
-  const activeClip = videoClips[activeVideoClipIndex] || null;
-  const updateClip = clip => {
-    if (clip?.file === file) clip.fitAnchorTimeMs = date.getTime();
-  };
-  videoClips.forEach(updateClip);
-  if (videoClipDraft) videoClipDraft.forEach(updateClip);
-
-  if (!videoClipOrderManuallyChanged) {
-    if (videoClipDraft) videoClipDraft = sortVideoClipsByShootingDate(videoClipDraft);
-    if (videoClips.length > 1) {
-      videoClips = sortVideoClipsByShootingDate(videoClips);
-      const activeIndex = activeClip ? videoClips.indexOf(activeClip) : -1;
-      if (activeIndex >= 0) activeVideoClipIndex = activeIndex;
-    }
-  }
-
-  renderVideoClipEditorList();
-  renderVideoClipList();
-  updateSyncDisplay();
-}
-
-function resolveVideoClipShootingDate(file) {
-  return readMp4CreationDate(file).then(date => {
-    if (date) applyResolvedVideoClipDate(file, date);
-    return date || getVideoClipShootingDate(file);
-  });
 }
 
 function formatVideoClipShootingDate(file) {
@@ -5580,7 +5538,7 @@ function getVideoResolutionLabel(width, height) {
 function makeVideoClip(file) {
   const url = URL.createObjectURL(file);
   const shootingDate = getVideoClipShootingDate(file);
-  const clip = {
+  return {
     file,
     url,
     thumbnailUrl: "",
@@ -5593,8 +5551,6 @@ function makeVideoClip(file) {
     fitAnchorTimeMs: shootingDate ? shootingDate.getTime() : null,
     manualSyncOffset: 0
   };
-  resolveVideoClipShootingDate(file);
-  return clip;
 }
 
 function findExistingVideoClip(file, clips = videoClips) {
@@ -5806,7 +5762,11 @@ function removeDraftVideoClip(index) {
   renderVideoClipEditorList();
 }
 
-function addFilesToVideoClipDraft(files) {
+async function addFilesToVideoClipDraft(files) {
+  if (!videoClipDraft) return;
+
+  // 内部日時を取得してからクリップを作成し、自動整列とFIT同期アンカーに反映する。
+  await Promise.all(files.map(file => readMp4EmbeddedCreationDate(file)));
   if (!videoClipDraft) return;
 
   // クリップがまだ1本もない状態で最初の動画を選択した場合は、
@@ -6232,7 +6192,7 @@ document.getElementById("videoCutSetStartButton")?.addEventListener("click", han
 document.getElementById("videoCutSetEndButton")?.addEventListener("click", handleVideoTrimSetEnd);
 document.getElementById("videoCutResetButton")?.addEventListener("click", resetVideoCuts);
 
-videoFileInput.addEventListener("change", () => {
+videoFileInput.addEventListener("change", async () => {
   const files = Array.from(videoFileInput.files || []);
   videoFileInput.value = "";
   if (!files.length) return;
@@ -6244,7 +6204,7 @@ videoFileInput.addEventListener("change", () => {
     openVideoClipEditor();
   }
 
-  addFilesToVideoClipDraft(files);
+  await addFilesToVideoClipDraft(files);
 
   // 初回選択時の並び順は addFilesToVideoClipDraft() で
   // 撮影日時の早い順に確定する。
