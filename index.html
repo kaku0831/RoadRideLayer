@@ -12428,6 +12428,9 @@ const DEFAULT_LAYER_LAYOUT = {
 let layerLayout = {};
 let layerEditMode = false;
 let activeLayerInteraction = null;
+// タブレットの2本指ピンチでMAP／グラフを拡大縮小するための状態。
+const layerTouchPointers = new Map();
+let activeLayerPinch = null;
 
 /* =========================================
    Layer Undo / Redo
@@ -13119,16 +13122,161 @@ function endLayerEditMode() {
 
 layerElements.forEach(layer => {
   layer.addEventListener("pointerdown", event => {
-    const handle = event.target.closest(".layer-resize-handle");
+    const key = layer.dataset.layer;
+    const pinchEligible = ["map", "powerGraph", "combinedProfileGraph"].includes(key);
+
+    if (event.pointerType === "touch" && pinchEligible) {
+      layerTouchPointers.set(event.pointerId, {
+        layer,
+        x: event.clientX,
+        y: event.clientY
+      });
+
+      const sameLayerPointers = Array.from(layerTouchPointers.entries())
+        .filter(([, point]) => point.layer === layer);
+
+      // 2本目の指が同じレイヤーに触れたら、ドラッグからピンチへ切り替える。
+      if (sameLayerPointers.length >= 2) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const historyBefore = activeLayerInteraction?.layer === layer
+          ? activeLayerInteraction.historyBefore
+          : cloneLayerLayoutState();
+        const containerRect = videoContainer.getBoundingClientRect();
+        const rect = layer.getBoundingClientRect();
+        const responsiveScale = getRightLayerResponsiveScale();
+
+        if (activeLayerInteraction) {
+          try {
+            activeLayerInteraction.layer.releasePointerCapture?.(activeLayerInteraction.pointerId);
+          } catch (e) {}
+          activeLayerInteraction = null;
+        }
+
+        const [first, second] = sameLayerPointers.slice(-2);
+        const distance = Math.hypot(second[1].x - first[1].x, second[1].y - first[1].y);
+        activeLayerPinch = {
+          layer,
+          key,
+          pointerIds: [first[0], second[0]],
+          startDistance: Math.max(1, distance),
+          startLeft: rect.left - containerRect.left,
+          startTop: rect.top - containerRect.top,
+          startWidth: rect.width,
+          startHeight: rect.height,
+          centerX: rect.left - containerRect.left + rect.width / 2,
+          centerY: rect.top - containerRect.top + rect.height / 2,
+          containerRect,
+          responsiveScale,
+          historyBefore
+        };
+        setLayerSelected(layer);
+        try { layer.setPointerCapture?.(event.pointerId); } catch (e) {}
+        return;
+      }
+
+      if (activeLayerPinch?.layer === layer) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+    }
 
     // レイヤーをタップした瞬間に編集モードへ。
     if (!layerEditMode) {
       startLayerEditMode();
     }
 
-    beginLayerInteraction(event, layer, handle ? "resize" : "move");
+    beginLayerInteraction(event, layer, event.target.closest(".layer-resize-handle") ? "resize" : "move");
   }, { passive: false });
 });
+
+function updateLayerPinch(event) {
+  if (event.pointerType === "touch" && layerTouchPointers.has(event.pointerId)) {
+    const point = layerTouchPointers.get(event.pointerId);
+    point.x = event.clientX;
+    point.y = event.clientY;
+  }
+
+  const state = activeLayerPinch;
+  if (!state || !state.pointerIds.includes(event.pointerId)) return;
+  event.preventDefault();
+
+  const first = layerTouchPointers.get(state.pointerIds[0]);
+  const second = layerTouchPointers.get(state.pointerIds[1]);
+  if (!first || !second) return;
+
+  const distance = Math.hypot(second.x - first.x, second.y - first.y);
+  const factor = distance / state.startDistance;
+  const cw = state.containerRect.width;
+  const ch = state.containerRect.height;
+  const isMap = state.key === "map";
+  const responsiveScale = state.responsiveScale || 1;
+  const minWidth = (isMap ? 140 : state.key === "powerGraph" ? 160 : 180) * (isMap ? responsiveScale : 1);
+  const minHeight = (isMap ? 100 : state.key === "powerGraph" ? 90 : 100) * (isMap ? responsiveScale : 1);
+  const maxFactor = Math.min(cw / state.startWidth, ch / state.startHeight);
+  const minFactor = Math.max(minWidth / state.startWidth, minHeight / state.startHeight);
+  const scale = Math.max(minFactor, Math.min(maxFactor, factor));
+  const width = Math.max(minWidth, Math.min(cw, state.startWidth * scale));
+  const height = Math.max(minHeight, Math.min(ch, state.startHeight * scale));
+  const left = Math.max(0, Math.min(cw - width, state.centerX - width / 2));
+  const top = Math.max(0, Math.min(ch - height, state.centerY - height / 2));
+  const layout = layerLayout[state.key];
+
+  layout.left = left / cw * 100;
+  layout.top = top / ch * 100;
+  state.layer.style.left = layout.left + "%";
+  state.layer.style.top = layout.top + "%";
+  state.layer.style.right = "auto";
+  state.layer.style.bottom = "auto";
+
+  if (isMap) {
+    layout.width = width / responsiveScale;
+    layout.height = height / responsiveScale;
+    state.layer.style.width = width + "px";
+    state.layer.style.height = height + "px";
+    if (overlayMap) requestAnimationFrame(() => overlayMap.invalidateSize(false));
+    updateMapLayerControlsPosition();
+  } else {
+    const graphScale = responsiveScale;
+    layout.width = width / cw * 100;
+    layout.height = height / graphScale;
+    state.layer.style.width = layout.width + "%";
+    state.layer.style.height = height + "px";
+    if (state.key === "powerGraph") {
+      delete layout.right;
+      delete layout.bottom;
+      resizePowerCanvas();
+      updatePowerGraphControlPositions();
+    } else {
+      resizeCombinedProfileGraphCanvas();
+    }
+  }
+}
+
+function endLayerPinch(event) {
+  if (event?.pointerId != null) layerTouchPointers.delete(event.pointerId);
+  if (!activeLayerPinch) return;
+  if (event?.pointerId != null && !activeLayerPinch.pointerIds.includes(event.pointerId)) return;
+
+  const state = activeLayerPinch;
+  activeLayerPinch = null;
+  // ピンチ操作全体をUndoの1操作として保存する。
+  pushLayerUndo(state.historyBefore, cloneLayerLayoutState());
+  saveLayerLayout();
+  resizePowerCanvas();
+  if (state.key === "combinedProfileGraph") resizeCombinedProfileGraphCanvas();
+  if (state.key === "map") requestAnimationFrame(() => {
+    if (overlayMap) overlayMap.invalidateSize(false);
+    updateMapLayerControlsPosition();
+  });
+  if (state.key === "powerGraph") requestAnimationFrame(updatePowerGraphControlPositions);
+  // もう一方の指が残っていても、次の操作に古い座標を持ち越さない。
+  for (const [pointerId, point] of layerTouchPointers) {
+    if (point.layer === state.layer) layerTouchPointers.delete(pointerId);
+  }
+}
 
 document.addEventListener("pointerdown", event => {
   if (!layerEditMode) return;
@@ -13136,8 +13284,11 @@ document.addEventListener("pointerdown", event => {
   endLayerEditMode();
 }, { passive: true });
 
+document.addEventListener("pointermove", updateLayerPinch, { passive: false });
 document.addEventListener("pointermove", updateLayerInteraction, { passive: false });
+document.addEventListener("pointerup", endLayerPinch, { passive: false });
 document.addEventListener("pointerup", endLayerInteraction, { passive: false });
+document.addEventListener("pointercancel", endLayerPinch, { passive: false });
 document.addEventListener("pointercancel", endLayerInteraction, { passive: false });
 
 document.addEventListener("keydown", event => {
