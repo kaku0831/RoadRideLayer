@@ -14858,6 +14858,7 @@ window.addEventListener("resize", () => {
     let output = null;
     let videoSource = null;
     let audioSource = null;
+    let audioProcessingPromise = null;
     let streamWritable = null;
     let streamFileHandle = null;
     let streamingToDisk = false;
@@ -15637,7 +15638,7 @@ window.addEventListener("resize", () => {
       output.addVideoTrack(videoSource, { frameRate: fps });
 
       // 単一AACクリップは、全尺でも一部分の切り出しでも、音声を再エンコードせず
-      // 必要なAACパケットだけを選んでMP4へコピーする。複数クリップ／非AACは従来方式。
+      // 必要なAACパケットだけをMP4へコピーする。複数クリップ／非AACは従来方式。
       let audioReady = false;
       let audioCopyMode = false;
       let audioDecoderConfig = null;
@@ -15724,6 +15725,173 @@ window.addEventListener("resize", () => {
       let frameIndex = 0;
       let audioFrameCount = 0;
       let lastPct = -1;
+      // 音声の読み取り・追加を映像処理と並行して開始し、待ち時間を重ねる。
+      // 音声・映像は独立したトラックに、従来どおり同じ出力タイムスタンプで追加する。
+      const audioClipTimings = [];
+      let videoProcessingFinished = false;
+      let audioProcessingError = null;
+      if (audioReady && audioSource) {
+        audioProcessingPromise = (async () => {
+          const audioProcessingStart = performance.now();
+      if (audioReady && audioSource) {
+        let projectCursorAudio = 0;
+        for (let i = 0; i < clipInfos.length; i++) {
+          const info = clipInfos[i];
+          const clipProjectStart = projectCursorAudio;
+          const clipProjectEnd = clipProjectStart + info.duration;
+          projectCursorAudio = clipProjectEnd;
+          if (!info.audioTrack) continue;
+
+          const localStart = Math.max(0, projectStart - clipProjectStart);
+          const localEnd = Math.min(info.duration, projectEnd - clipProjectStart);
+          if (localEnd <= localStart + 0.000001) continue;
+
+          const audioClipStart = performance.now();
+          let clipAudioSampleCount = 0;
+          let lastAudioUiUpdate = audioClipStart;
+          let audioLookupMs = 0;
+          let audioReadWaitMs = 0;
+          let audioReadWaitMaxMs = 0;
+          let audioReadWaitOver100Ms = 0;
+          let audioReadWaitCount = 0;
+          let audioPacketBytes = 0;
+          let audioAddWaitMs = 0;
+          let audioPacketPrepMs = 0;
+          let audioUiYieldMs = 0;
+          const audioProgressLabel = audioCopyMode ? "音声コピー中" : "音声処理中";
+          if (videoProcessingFinished) {
+            setExportProgress(99, `${audioProgressLabel}（${i + 1}/${clipInfos.length}本目）`);
+            setFastTestStatus(`${audioProgressLabel}（${i + 1}/${clipInfos.length}本目）…`);
+          }
+          const audioSink = audioCopyMode
+            ? new MB.EncodedPacketSink(info.audioTrack)
+            : new MB.AudioSampleSink(info.audioTrack);
+          try {
+            if (audioCopyMode) {
+              // AACパケットは分割できないため、切り出し範囲内のパケットだけをコピーする。
+              // 先頭時刻を0秒へ移し、開始・終了境界の誤差は最大で概ね1 AACフレーム。
+              const lookupStart = performance.now();
+              let startPacket = await audioSink.getPacket(localStart);
+              if (!startPacket) startPacket = await audioSink.getFirstPacket();
+              else if (startPacket.timestamp < localStart - 0.000001) {
+                startPacket = await audioSink.getNextPacket(startPacket);
+              }
+              let endPacket = await audioSink.getPacket(localEnd);
+              if (endPacket && endPacket.timestamp < localEnd - 0.000001) {
+                endPacket = await audioSink.getNextPacket(endPacket);
+              }
+              audioLookupMs += performance.now() - lookupStart;
+              let firstAudioPacket = true;
+              if (startPacket) {
+                let previousPacketStepEnd = performance.now();
+                for await (const packet of audioSink.packets(startPacket, endPacket)) {
+                  const packetReadyAt = performance.now();
+                  const packetReadWaitMs = Math.max(0, packetReadyAt - previousPacketStepEnd);
+                  audioReadWaitMs += packetReadWaitMs;
+                  audioReadWaitMaxMs = Math.max(audioReadWaitMaxMs, packetReadWaitMs);
+                  if (packetReadWaitMs > 100) audioReadWaitOver100Ms++;
+                  audioReadWaitCount++;
+                  audioPacketBytes += Number(packet.byteLength) || 0;
+                  if (packet.timestamp < localStart - 0.000001) {
+                    previousPacketStepEnd = performance.now();
+                    continue;
+                  }
+                  if (packet.timestamp >= localEnd - 0.000001) break;
+                  const prepStart = performance.now();
+                  const shiftedPacket = packet.clone({
+                    timestamp: Math.max(0, clipProjectStart + packet.timestamp - projectStart)
+                  });
+                  audioPacketPrepMs += performance.now() - prepStart;
+                  const addStart = performance.now();
+                  await audioSource.add(shiftedPacket, firstAudioPacket ? { decoderConfig: audioDecoderConfig } : undefined);
+                  audioAddWaitMs += performance.now() - addStart;
+                  firstAudioPacket = false;
+                  audioFrameCount++;
+                  clipAudioSampleCount++;
+                  const now = performance.now();
+                  if (videoProcessingFinished && now - lastAudioUiUpdate >= 1000) {
+                    setExportProgress(99, `音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）`);
+                    setFastTestStatus(`音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）…`);
+                    lastAudioUiUpdate = now;
+                    const uiYieldStart = performance.now();
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                    audioUiYieldMs += performance.now() - uiYieldStart;
+                  }
+                  previousPacketStepEnd = performance.now();
+                }
+              }
+            } else {
+            for await (const sample of audioSink.samples(localStart, localEnd)) {
+              if (!sample) continue;
+              const sampleStart = sample.timestamp;
+              const sampleEnd = sampleStart + sample.duration;
+              if (sampleEnd <= localStart || sampleStart >= localEnd) {
+                sample.close();
+                continue;
+              }
+
+              let outSample = sample;
+              let effectiveStart = sampleStart;
+              if (sampleStart < localStart || sampleEnd > localEnd) {
+                const startFrames = sampleStart < localStart
+                  ? Math.max(0, Math.round((localStart - sampleStart) * sample.sampleRate))
+                  : 0;
+                const endFrames = sampleEnd > localEnd
+                  ? Math.min(sample.numberOfFrames, Math.round((localEnd - sampleStart) * sample.sampleRate))
+                  : sample.numberOfFrames;
+                if (endFrames <= startFrames) {
+                  sample.close();
+                  continue;
+                }
+                outSample = sample.trim(startFrames, endFrames);
+                sample.close();
+                effectiveStart = localStart;
+              }
+
+              const projectTime = clipProjectStart + effectiveStart;
+              const outputTime = projectTime - projectStart;
+              outSample.setTimestamp(Math.max(0, outputTime));
+              await audioSource.add(outSample);
+              outSample.close();
+              audioFrameCount++;
+              clipAudioSampleCount++;
+
+              const now = performance.now();
+              if (videoProcessingFinished && now - lastAudioUiUpdate >= 1000) {
+                setExportProgress(99, `音声処理中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}サンプル）`);
+                setFastTestStatus(`音声処理中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}サンプル）…`);
+                lastAudioUiUpdate = now;
+                await new Promise(resolve => setTimeout(resolve, 0));
+              }
+            }
+            }
+          } finally {
+            try { audioSink.dispose?.(); } catch (_) {}
+          }
+          audioClipTimings.push({
+            clip: i + 1,
+            seconds: (performance.now() - audioClipStart) / 1000,
+            samples: clipAudioSampleCount,
+            mode: audioCopyMode ? "パケットコピー" : "再エンコード",
+            lookupSeconds: audioLookupMs / 1000,
+            readWaitSeconds: audioReadWaitMs / 1000,
+            readWaitAverageMs: audioReadWaitCount ? audioReadWaitMs / audioReadWaitCount : 0,
+            readWaitMaxMs: audioReadWaitMaxMs,
+            readWaitOver100Ms: audioReadWaitOver100Ms,
+            packetBytes: audioPacketBytes,
+            addWaitSeconds: audioAddWaitMs / 1000,
+            prepSeconds: audioPacketPrepMs / 1000,
+            uiYieldSeconds: audioUiYieldMs / 1000
+          });
+        }
+        audioSource.close();
+        audioSource = null;
+      }
+
+          exportAudioElapsed = (performance.now() - audioProcessingStart) / 1000;
+        })().catch(error => { audioProcessingError = error; });
+      }
+
       let projectCursor = 0;
       // 出力FPSを実フレームへ反映するため、元動画のフレームを
       // 出力FPSの時間グリッドへ割り当てる。
@@ -15812,172 +15980,12 @@ window.addEventListener("resize", () => {
       exportVideoElapsed = (performance.now() - exportProcessingStart) / 1000 - exportOutputStartElapsed;
       exportEncodeElapsed = Math.max(0, exportVideoElapsed - exportRenderElapsed);
 
-      // 映像と同じプロジェクト時間軸で音声を追加。
-      // 条件を満たす単一AACクリップはパケットコピー、それ以外は従来どおりAACへ再エンコード。
-      const audioClipTimings = [];
-      if (audioReady && audioSource) {
-        let projectCursorAudio = 0;
+      videoProcessingFinished = true;
+      if (audioProcessingPromise) {
         setExportProgress(99, audioCopyMode ? "音声をコピーしています…" : "音声を処理しています…");
-        setFastTestStatus(audioCopyMode ? "映像処理が完了しました。音声をコピーしています…" : "動画の映像処理が完了しました。音声を処理しています…");
-        for (let i = 0; i < clipInfos.length; i++) {
-          const info = clipInfos[i];
-          const clipProjectStart = projectCursorAudio;
-          const clipProjectEnd = clipProjectStart + info.duration;
-          projectCursorAudio = clipProjectEnd;
-          if (!info.audioTrack) continue;
-
-          const localStart = Math.max(0, projectStart - clipProjectStart);
-          const localEnd = Math.min(info.duration, projectEnd - clipProjectStart);
-          if (localEnd <= localStart + 0.000001) continue;
-
-          const audioClipStart = performance.now();
-          let clipAudioSampleCount = 0;
-          let lastAudioUiUpdate = audioClipStart;
-          // 音声処理時間を「パケット検索」「読み出し待ち」「出力追加待ち」「UI更新」に分けて計測する。
-          let audioLookupMs = 0;
-          let audioReadWaitMs = 0;
-          let audioReadWaitMaxMs = 0;
-          let audioReadWaitOver100Ms = 0;
-          let audioReadWaitCount = 0;
-          let audioPacketBytes = 0;
-          let audioAddWaitMs = 0;
-          let audioPacketPrepMs = 0;
-          let audioUiYieldMs = 0;
-          const audioProgressLabel = audioCopyMode ? "音声コピー中" : "音声処理中";
-          setExportProgress(99, `${audioProgressLabel}（${i + 1}/${clipInfos.length}本目）`);
-          setFastTestStatus(`${audioProgressLabel}（${i + 1}/${clipInfos.length}本目）…`);
-          const audioSink = audioCopyMode
-            ? new MB.EncodedPacketSink(info.audioTrack)
-            : new MB.AudioSampleSink(info.audioTrack);
-          try {
-            if (audioCopyMode) {
-              // AACパケットは分割できないため、開始位置より前のパケットは除外し、
-              // 終了位置より前のパケットまでをコピーする。境界誤差は最大で概ね1 AACフレーム。
-              const lookupStart = performance.now();
-              let startPacket = await audioSink.getPacket(localStart);
-              if (!startPacket) startPacket = await audioSink.getFirstPacket();
-              else if (startPacket.timestamp < localStart - 0.000001) {
-                startPacket = await audioSink.getNextPacket(startPacket);
-              }
-
-              let endPacket = await audioSink.getPacket(localEnd);
-              if (endPacket && endPacket.timestamp < localEnd - 0.000001) {
-                endPacket = await audioSink.getNextPacket(endPacket);
-              }
-              audioLookupMs += performance.now() - lookupStart;
-
-              let firstAudioPacket = true;
-              if (startPacket) {
-                let previousPacketStepEnd = performance.now();
-                for await (const packet of audioSink.packets(startPacket, endPacket)) {
-                  const packetReadyAt = performance.now();
-                  const packetReadWaitMs = Math.max(0, packetReadyAt - previousPacketStepEnd);
-                  audioReadWaitMs += packetReadWaitMs;
-                  audioReadWaitMaxMs = Math.max(audioReadWaitMaxMs, packetReadWaitMs);
-                  if (packetReadWaitMs > 100) audioReadWaitOver100Ms++;
-                  audioReadWaitCount++;
-                  audioPacketBytes += Number(packet.byteLength) || 0;
-                  if (packet.timestamp < localStart - 0.000001) {
-                    previousPacketStepEnd = performance.now();
-                    continue;
-                  }
-                  if (packet.timestamp >= localEnd - 0.000001) break;
-                  const prepStart = performance.now();
-                  const shiftedPacket = packet.clone({
-                    timestamp: Math.max(0, clipProjectStart + packet.timestamp - projectStart)
-                  });
-                  audioPacketPrepMs += performance.now() - prepStart;
-                  const addStart = performance.now();
-                  await audioSource.add(
-                    shiftedPacket,
-                    firstAudioPacket ? { decoderConfig: audioDecoderConfig } : undefined
-                  );
-                  audioAddWaitMs += performance.now() - addStart;
-                  firstAudioPacket = false;
-                  audioFrameCount++;
-                  clipAudioSampleCount++;
-                  const now = performance.now();
-                  if (now - lastAudioUiUpdate >= 1000) {
-                    setExportProgress(99, `音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）`);
-                    setFastTestStatus(`音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）…`);
-                    lastAudioUiUpdate = now;
-                    const uiYieldStart = performance.now();
-                    await new Promise(resolve => setTimeout(resolve, 0));
-                    audioUiYieldMs += performance.now() - uiYieldStart;
-                  }
-                  previousPacketStepEnd = performance.now();
-                }
-              }
-            } else {
-            for await (const sample of audioSink.samples(localStart, localEnd)) {
-              if (!sample) continue;
-              const sampleStart = sample.timestamp;
-              const sampleEnd = sampleStart + sample.duration;
-              if (sampleEnd <= localStart || sampleStart >= localEnd) {
-                sample.close();
-                continue;
-              }
-
-              let outSample = sample;
-              let effectiveStart = sampleStart;
-              if (sampleStart < localStart || sampleEnd > localEnd) {
-                const startFrames = sampleStart < localStart
-                  ? Math.max(0, Math.round((localStart - sampleStart) * sample.sampleRate))
-                  : 0;
-                const endFrames = sampleEnd > localEnd
-                  ? Math.min(sample.numberOfFrames, Math.round((localEnd - sampleStart) * sample.sampleRate))
-                  : sample.numberOfFrames;
-                if (endFrames <= startFrames) {
-                  sample.close();
-                  continue;
-                }
-                outSample = sample.trim(startFrames, endFrames);
-                sample.close();
-                effectiveStart = localStart;
-              }
-
-              const projectTime = clipProjectStart + effectiveStart;
-              const outputTime = projectTime - projectStart;
-              outSample.setTimestamp(Math.max(0, outputTime));
-              await audioSource.add(outSample);
-              outSample.close();
-              audioFrameCount++;
-              clipAudioSampleCount++;
-
-              const now = performance.now();
-              if (now - lastAudioUiUpdate >= 1000) {
-                setExportProgress(99, `音声処理中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}サンプル）`);
-                setFastTestStatus(`音声処理中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}サンプル）…`);
-                lastAudioUiUpdate = now;
-                await new Promise(resolve => setTimeout(resolve, 0));
-              }
-            }
-            }
-          } finally {
-            try { audioSink.dispose?.(); } catch (_) {}
-          }
-          audioClipTimings.push({
-            clip: i + 1,
-            seconds: (performance.now() - audioClipStart) / 1000,
-            samples: clipAudioSampleCount,
-            mode: audioCopyMode ? "パケットコピー" : "再エンコード",
-            lookupSeconds: audioLookupMs / 1000,
-            readWaitSeconds: audioReadWaitMs / 1000,
-            readWaitAverageMs: audioReadWaitCount ? audioReadWaitMs / audioReadWaitCount : 0,
-            readWaitMaxMs: audioReadWaitMaxMs,
-            readWaitOver100Ms: audioReadWaitOver100Ms,
-            packetBytes: audioPacketBytes,
-            addWaitSeconds: audioAddWaitMs / 1000,
-            prepSeconds: audioPacketPrepMs / 1000,
-            uiYieldSeconds: audioUiYieldMs / 1000
-          });
-        }
-        audioSource.close();
-        audioSource = null;
-      }
-
-      if (audioReady) {
-        exportAudioElapsed = Math.max(0, (performance.now() - exportProcessingStart) / 1000 - exportOutputStartElapsed - exportVideoElapsed);
+        setFastTestStatus(audioCopyMode ? "映像処理が完了しました。音声をコピーしています…" : "映像処理が完了しました。音声を処理しています…");
+        await audioProcessingPromise;
+        if (audioProcessingError) throw audioProcessingError;
       }
 
       videoSource.close();
@@ -16043,6 +16051,8 @@ window.addEventListener("resize", () => {
           await output.cancel();
         }
       } catch (_) {}
+      // Cancel the output first so any audio add() waiting on backpressure can settle.
+      try { if (audioProcessingPromise) await audioProcessingPromise; } catch (_) {}
       try {
         if (streamWritable && typeof streamWritable.abort === "function") await streamWritable.abort();
       } catch (_) {}
