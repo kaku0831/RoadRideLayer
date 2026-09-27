@@ -15784,15 +15784,14 @@ window.addEventListener("resize", () => {
               else if (startPacket.timestamp < localStart - 0.000001) {
                 startPacket = await audioSink.getNextPacket(startPacket);
               }
-              let endPacket = await audioSink.getPacket(localEnd);
-              if (endPacket && endPacket.timestamp < localEnd - 0.000001) {
-                endPacket = await audioSink.getNextPacket(endPacket);
-              }
+              // 終了位置の次パケットが存在しない場合、nullをendPacketに渡すと
+              // Mediabunnyが例外を投げるため、開始パケットから走査し時刻で終了する。
+              // ループ内でlocalEnd以降を検出してbreakするので、終了境界も維持できる。
               audioLookupMs += performance.now() - lookupStart;
               let firstAudioPacket = true;
               if (startPacket) {
                 let previousPacketStepEnd = performance.now();
-                for await (const packet of audioSink.packets(startPacket, endPacket)) {
+                for await (const packet of audioSink.packets(startPacket)) {
                   const packetReadyAt = performance.now();
                   const packetReadWaitMs = Math.max(0, packetReadyAt - previousPacketStepEnd);
                   audioReadWaitMs += packetReadWaitMs;
