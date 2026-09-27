@@ -14327,6 +14327,12 @@ window.addEventListener("resize", () => {
     const mapOpacity = Number.parseFloat(getComputedStyle(map).opacity);
     const opacity = Number.isFinite(mapOpacity) ? Math.max(0, Math.min(1, mapOpacity)) : 0.7;
     const mapRect = map.getBoundingClientRect();
+    // MAP本体がレイヤー枠と完全に同じ原点・サイズとは限らないため、
+    // 書き出しではLeafletコンテナの実際の位置を基準に全要素を配置する。
+    const mapOffsetX = (mapRect.left - rect.left) * scaleX;
+    const mapOffsetY = (mapRect.top - rect.top) * scaleY;
+    const mapW = mapRect.width * scaleX;
+    const mapH = mapRect.height * scaleY;
 
     ctx.save();
     roundedRect(ctx, x, y, w, h, 8 * Math.min(scaleX, scaleY));
@@ -14337,8 +14343,8 @@ window.addEventListener("resize", () => {
     const mapTilesStart = window.__rvlExportBreakdown ? performance.now() : 0;
     map.querySelectorAll("img.leaflet-tile").forEach(tile => {
       const tr = tile.getBoundingClientRect();
-      const tx = x + (tr.left - mapRect.left) * scaleX;
-      const ty = y + (tr.top - mapRect.top) * scaleY;
+      const tx = x + mapOffsetX + (tr.left - mapRect.left) * scaleX;
+      const ty = y + mapOffsetY + (tr.top - mapRect.top) * scaleY;
       const tw = tr.width * scaleX;
       const th = tr.height * scaleY;
       if (tw <= 0 || th <= 0) return;
@@ -14358,7 +14364,7 @@ window.addEventListener("resize", () => {
 
     if (!drewTiles) {
       ctx.fillStyle = "#e8e8e8";
-      ctx.fillRect(x, y, w, h);
+      ctx.fillRect(x + mapOffsetX, y + mapOffsetY, mapW, mapH);
     }
     if (window.__rvlExportBreakdown) window.__rvlExportBreakdown.mapDrawTiles += (performance.now() - mapTilesStart) / 1000;
 
@@ -14431,7 +14437,7 @@ window.addEventListener("resize", () => {
           ctx.globalAlpha = 1;
           ctx.lineJoin = "round";
           ctx.lineCap = "round";
-          ctx.translate(x + shiftX * scaleX, y + shiftY * scaleY);
+          ctx.translate(x + mapOffsetX + shiftX * scaleX, y + mapOffsetY + shiftY * scaleY);
           ctx.scale(scaleX, scaleY);
 
           // 元の見た目と同じ二重線。Path2Dだけを再利用し、座標計算を省略する。
@@ -14460,8 +14466,8 @@ window.addEventListener("resize", () => {
             latlngs.forEach(latlng => {
               const point = overlayMap.latLngToContainerPoint(latlng);
               if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
-              const px = x + point.x * scaleX;
-              const py = y + point.y * scaleY;
+              const px = x + mapOffsetX + point.x * scaleX;
+              const py = y + mapOffsetY + point.y * scaleY;
               if (!moved) { ctx.moveTo(px, py); moved = true; }
               else ctx.lineTo(px, py);
             });
@@ -14482,7 +14488,13 @@ window.addEventListener("resize", () => {
     ctx.globalAlpha = 1;
     ctx.fillStyle = "#2f8cff";
     ctx.beginPath();
-    ctx.arc(x + w / 2, y + h / 2, Math.max(3, 4 * Math.min(scaleX, scaleY)), 0, Math.PI * 2);
+    ctx.arc(
+      x + mapOffsetX + mapW / 2,
+      y + mapOffsetY + mapH / 2,
+      Math.max(3, 4 * Math.min(scaleX, scaleY)),
+      0,
+      Math.PI * 2
+    );
     ctx.fill();
 
     // MAPの北向き表示。LeafletのMAPは常に北が上なので、
@@ -14490,8 +14502,8 @@ window.addEventListener("resize", () => {
     const northIndicator = document.getElementById("mapNorthIndicator");
     if (northIndicator && getComputedStyle(northIndicator).display !== "none") {
       const nr = northIndicator.getBoundingClientRect();
-      const nx = x + (nr.left - mapRect.left) * scaleX;
-      const ny = y + (nr.top - mapRect.top) * scaleY;
+      const nx = x + mapOffsetX + (nr.left - mapRect.left) * scaleX;
+      const ny = y + mapOffsetY + (nr.top - mapRect.top) * scaleY;
       const nw = nr.width * scaleX;
       const nh = nr.height * scaleY;
       const northStyle = getComputedStyle(northIndicator);
@@ -14522,8 +14534,8 @@ window.addEventListener("resize", () => {
     const label = document.getElementById("mapOverlayLabel");
     if (label && getComputedStyle(label).display !== "none") {
       const lr = label.getBoundingClientRect();
-      const lx = x + (lr.left - mapRect.left) * scaleX;
-      const ly = y + (lr.top - mapRect.top) * scaleY;
+      const lx = x + mapOffsetX + (lr.left - mapRect.left) * scaleX;
+      const ly = y + mapOffsetY + (lr.top - mapRect.top) * scaleY;
       const lw = lr.width * scaleX;
       const lh = lr.height * scaleY;
       ctx.fillStyle = getComputedStyle(label).backgroundColor || "rgba(0,0,0,.68)";
