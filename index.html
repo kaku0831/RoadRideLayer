@@ -14974,7 +14974,7 @@ window.addEventListener("resize", () => {
             // StreamTargetでは完成ファイル全体をメモリに保持しない。
             // fastStart:falseなら巨大なmoov予約領域も不要。
             format: new MB.Mp4OutputFormat({ fastStart: false }),
-            target: new MB.StreamTarget(streamWritable, { chunked: true, chunkSize: 16 * 1024 * 1024 })
+            target: new MB.StreamTarget(streamWritable, { chunked: true, chunkSize: 4 * 1024 * 1024 })
           })
         : new MB.Output({
             format: new MB.Mp4OutputFormat({ fastStart: "in-memory" }),
@@ -15628,7 +15628,7 @@ window.addEventListener("resize", () => {
       output = streamingToDisk
         ? new MB.Output({
             format: new MB.Mp4OutputFormat({ fastStart: false }),
-            target: new MB.StreamTarget(streamWritable, { chunked: true, chunkSize: 16 * 1024 * 1024 })
+            target: new MB.StreamTarget(streamWritable, { chunked: true, chunkSize: 4 * 1024 * 1024 })
           })
         : new MB.Output({
             format: new MB.Mp4OutputFormat({ fastStart: "in-memory" }),
@@ -15643,15 +15643,17 @@ window.addEventListener("resize", () => {
       });
       output.addVideoTrack(videoSource, { frameRate: fps });
 
-      // 単一AACクリップは、全尺でも一部分の切り出しでも、音声を再エンコードせず
-      // 必要なAACパケットだけをMP4へコピーする。複数クリップ／非AACは従来方式。
+      // 小さな単一AACクリップは再エンコードせずパケットコピーする。
+      // 大きな書き出しでは、Androidでのバッファ確保失敗を避けるため
+      // 音声をサンプル単位で順次処理・再エンコードする。
+      const AUDIO_PACKET_COPY_MAX_BYTES = 512 * 1024 * 1024;
       let audioReady = false;
       let audioCopyMode = false;
       let audioDecoderConfig = null;
       if (firstAudioTrack) {
         const singleClip = clipInfos.length === 1;
         const firstAudioCodec = await firstAudioTrack.getCodec();
-        if (singleClip && firstAudioCodec === "aac") {
+        if (singleClip && firstAudioCodec === "aac" && preEstimatedBytes < AUDIO_PACKET_COPY_MAX_BYTES) {
           try { audioDecoderConfig = await firstAudioTrack.getDecoderConfig(); } catch (_) {}
           if (audioDecoderConfig?.codec) {
             audioSource = new MB.EncodedAudioPacketSource("aac");
