@@ -15636,36 +15636,22 @@ window.addEventListener("resize", () => {
       });
       output.addVideoTrack(videoSource, { frameRate: fps });
 
-      // 単一クリップを全尺で書き出す場合は、AAC音声パケットを直接コピーする。
-      // UI側の動画長と入力トラックの実時間に数msの差があっても、
-      // 「カットしていない」ことをプロジェクトのトリム値から判定する。
+      // 単一AACクリップは、全尺でも一部分の切り出しでも、音声を再エンコードせず
+      // 必要なAACパケットだけを選んでMP4へコピーする。複数クリップ／非AACは従来方式。
       let audioReady = false;
       let audioCopyMode = false;
       let audioDecoderConfig = null;
-      let audioCopyDecision = "音声トラックなし";
       if (firstAudioTrack) {
-        const trimIsFull = trimStartMs <= 10
-          && trimEndMs >= totalDuration * 1000 - 10;
-        const singleFullClip = clipInfos.length === 1 && trimIsFull;
-        let firstAudioCodec = null;
-        try { firstAudioCodec = await firstAudioTrack.getCodec(); } catch (_) {}
-        if (singleFullClip && firstAudioCodec === "aac") {
+        const singleClip = clipInfos.length === 1;
+        const firstAudioCodec = await firstAudioTrack.getCodec();
+        if (singleClip && firstAudioCodec === "aac") {
           try { audioDecoderConfig = await firstAudioTrack.getDecoderConfig(); } catch (_) {}
           if (audioDecoderConfig?.codec) {
             audioSource = new MB.EncodedAudioPacketSource("aac");
             output.addAudioTrack(audioSource);
             audioReady = true;
             audioCopyMode = true;
-            audioCopyDecision = "パケットコピーを使用（AAC・単一クリップ・全尺）";
-          } else {
-            audioCopyDecision = "再エンコード（AACのデコーダー設定を取得できない）";
           }
-        } else {
-          const reasons = [];
-          if (clipInfos.length !== 1) reasons.push(`クリップ数=${clipInfos.length}`);
-          if (!trimIsFull) reasons.push(`カット範囲あり（開始${trimStartMs.toFixed(0)}ms／終了${trimEndMs.toFixed(0)}ms）`);
-          if (firstAudioCodec !== "aac") reasons.push(`音声コーデック=${firstAudioCodec || "不明"}`);
-          audioCopyDecision = `再エンコード（${reasons.join("・") || "直接コピー条件外"}）`;
         }
         if (!audioCopyMode) {
           const channels = await firstAudioTrack.getNumberOfChannels();
@@ -15855,18 +15841,41 @@ window.addEventListener("resize", () => {
             : new MB.AudioSampleSink(info.audioTrack);
           try {
             if (audioCopyMode) {
+              // AACパケットは分割できないため、開始位置より前のパケットは除外し、
+              // 終了位置より前のパケットまでをコピーする。境界誤差は最大で概ね1 AACフレーム。
+              let startPacket = await audioSink.getPacket(localStart);
+              if (!startPacket) startPacket = await audioSink.getFirstPacket();
+              else if (startPacket.timestamp < localStart - 0.000001) {
+                startPacket = await audioSink.getNextPacket(startPacket);
+              }
+
+              let endPacket = await audioSink.getPacket(localEnd);
+              if (endPacket && endPacket.timestamp < localEnd - 0.000001) {
+                endPacket = await audioSink.getNextPacket(endPacket);
+              }
+
               let firstAudioPacket = true;
-              for await (const packet of audioSink.packets()) {
-                await audioSource.add(packet, firstAudioPacket ? { decoderConfig: audioDecoderConfig } : undefined);
-                firstAudioPacket = false;
-                audioFrameCount++;
-                clipAudioSampleCount++;
-                const now = performance.now();
-                if (now - lastAudioUiUpdate >= 1000) {
-                  setExportProgress(99, `音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）`);
-                  setFastTestStatus(`音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）…`);
-                  lastAudioUiUpdate = now;
-                  await new Promise(resolve => setTimeout(resolve, 0));
+              if (startPacket) {
+                for await (const packet of audioSink.packets(startPacket, endPacket)) {
+                  if (packet.timestamp < localStart - 0.000001) continue;
+                  if (packet.timestamp >= localEnd - 0.000001) break;
+                  const shiftedPacket = packet.clone({
+                    timestamp: Math.max(0, clipProjectStart + packet.timestamp - projectStart)
+                  });
+                  await audioSource.add(
+                    shiftedPacket,
+                    firstAudioPacket ? { decoderConfig: audioDecoderConfig } : undefined
+                  );
+                  firstAudioPacket = false;
+                  audioFrameCount++;
+                  clipAudioSampleCount++;
+                  const now = performance.now();
+                  if (now - lastAudioUiUpdate >= 1000) {
+                    setExportProgress(99, `音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）`);
+                    setFastTestStatus(`音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）…`);
+                    lastAudioUiUpdate = now;
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                  }
                 }
               }
             } else {
@@ -15951,7 +15960,7 @@ window.addEventListener("resize", () => {
       const audioClipTimingText = audioClipTimings.length
         ? audioClipTimings.map(item => `${item.clip}本目 ${formatElapsed(item.seconds)}（${item.mode}・${item.samples}${item.mode === "パケットコピー" ? "パケット" : "サンプル"}）`).join("・")
         : "対象音声なし";
-      const timingDetail = `内訳：開始 ${formatElapsed(exportOutputStartElapsed)} / 映像 ${formatElapsed(exportVideoElapsed)}（描画 ${formatElapsed(exportRenderElapsed)}・エンコード ${formatElapsed(exportEncodeElapsed)}） / 描画詳細：更新 ${formatElapsed(breakdown.overlayUpdate || 0)}・PWRグラフ ${formatElapsed(breakdown.powerGraph || 0)}・標高+PWR ${formatElapsed(breakdown.combinedGraph || 0)}・元映像 ${formatElapsed(breakdown.videoDraw || 0)}・レイヤー ${formatElapsed(breakdown.layers || 0)}（ロゴ ${formatElapsed(breakdown.logo || 0)}・MAP ${formatElapsed(breakdown.map || 0)}・温度 ${formatElapsed(breakdown.temperature || 0)}・POWER ${formatElapsed(breakdown.power || 0)}・HR ${formatElapsed(breakdown.heartRate || 0)}・CAD ${formatElapsed(breakdown.cadence || 0)}・速度 ${formatElapsed(breakdown.speed || 0)}・斜度 ${formatElapsed(breakdown.grade || 0)}・標高 ${formatElapsed(breakdown.altitude || 0)}・距離 ${formatElapsed(breakdown.distance || 0)}・ギア ${formatElapsed(breakdown.gear || 0)}・時刻 ${formatElapsed(breakdown.currentTime || 0)}・LAP ${formatElapsed(breakdown.lapTimer || 0)}・PWRグラフ描画 ${formatElapsed(breakdown.powerGraphLayer || 0)}・標高+PWR描画 ${formatElapsed(breakdown.combinedProfileLayer || 0)}) / MAP詳細：更新準備 ${formatElapsed(breakdown.mapUpdateEnsure || 0)}・ルート抽出 ${formatElapsed(breakdown.mapUpdatePoints || 0)}・現在位置 ${formatElapsed(breakdown.mapUpdatePosition || 0)}・地図移動/ズーム ${formatElapsed(breakdown.mapUpdateView || 0)}・タイル描画 ${formatElapsed(breakdown.mapDrawTiles || 0)}・ルート描画 ${formatElapsed(breakdown.mapDrawRoute || 0)}・ラベル ${formatElapsed(breakdown.mapDrawLabel || 0)} / 音声 ${formatElapsed(exportAudioElapsed)}（判定：${audioCopyDecision}／クリップ別：${audioClipTimingText}） / 完成処理 ${formatElapsed(exportFinalizeElapsed)}`;
+      const timingDetail = `内訳：開始 ${formatElapsed(exportOutputStartElapsed)} / 映像 ${formatElapsed(exportVideoElapsed)}（描画 ${formatElapsed(exportRenderElapsed)}・エンコード ${formatElapsed(exportEncodeElapsed)}） / 描画詳細：更新 ${formatElapsed(breakdown.overlayUpdate || 0)}・PWRグラフ ${formatElapsed(breakdown.powerGraph || 0)}・標高+PWR ${formatElapsed(breakdown.combinedGraph || 0)}・元映像 ${formatElapsed(breakdown.videoDraw || 0)}・レイヤー ${formatElapsed(breakdown.layers || 0)}（ロゴ ${formatElapsed(breakdown.logo || 0)}・MAP ${formatElapsed(breakdown.map || 0)}・温度 ${formatElapsed(breakdown.temperature || 0)}・POWER ${formatElapsed(breakdown.power || 0)}・HR ${formatElapsed(breakdown.heartRate || 0)}・CAD ${formatElapsed(breakdown.cadence || 0)}・速度 ${formatElapsed(breakdown.speed || 0)}・斜度 ${formatElapsed(breakdown.grade || 0)}・標高 ${formatElapsed(breakdown.altitude || 0)}・距離 ${formatElapsed(breakdown.distance || 0)}・ギア ${formatElapsed(breakdown.gear || 0)}・時刻 ${formatElapsed(breakdown.currentTime || 0)}・LAP ${formatElapsed(breakdown.lapTimer || 0)}・PWRグラフ描画 ${formatElapsed(breakdown.powerGraphLayer || 0)}・標高+PWR描画 ${formatElapsed(breakdown.combinedProfileLayer || 0)}) / MAP詳細：更新準備 ${formatElapsed(breakdown.mapUpdateEnsure || 0)}・ルート抽出 ${formatElapsed(breakdown.mapUpdatePoints || 0)}・現在位置 ${formatElapsed(breakdown.mapUpdatePosition || 0)}・地図移動/ズーム ${formatElapsed(breakdown.mapUpdateView || 0)}・タイル描画 ${formatElapsed(breakdown.mapDrawTiles || 0)}・ルート描画 ${formatElapsed(breakdown.mapDrawRoute || 0)}・ラベル ${formatElapsed(breakdown.mapDrawLabel || 0)} / 音声 ${formatElapsed(exportAudioElapsed)}（クリップ別：${audioClipTimingText}） / 完成処理 ${formatElapsed(exportFinalizeElapsed)}`;
 
       if (streamingToDisk) {
         // StreamTargetはfinalize()完了時にWritableStreamも閉じる。
