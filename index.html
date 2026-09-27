@@ -15494,6 +15494,9 @@ window.addEventListener("resize", () => {
     let streamWritable = null;
     let streamFileHandle = null;
     let streamingToDisk = false;
+    // 複数クリップでは、finally内の元動画復帰処理がステータスを上書きするため、
+    // 完了メッセージを保持して復帰処理後にもう一度表示する。
+    let completedStatusMessage = null;
 
     if (!videoClips?.length) {
       setFastTestStatus("動画を書き出すには、先に動画を読み込んでください。");
@@ -16043,7 +16046,8 @@ window.addEventListener("resize", () => {
         streamWritable = null;
         finishExportProgress("書き出し完了");
         setExportCompleteIndicator(true);
-        setFastTestStatus(`動画書き出し完了（${formatExportHms(outputDuration)}・${timingText}・${timingDetail}・${clipInfos.length}本連結・等速MP4・音声${audioFrameCount > 0 ? "あり" : "なし"}・${frameIndex}video/${audioFrameCount}audio）`);
+        completedStatusMessage = `動画書き出し完了（${formatExportHms(outputDuration)}・${timingText}・${timingDetail}・${clipInfos.length}本連結・等速MP4・音声${audioFrameCount > 0 ? "あり" : "なし"}・${frameIndex}video/${audioFrameCount}audio）`;
+        setFastTestStatus(completedStatusMessage);
       } else {
         const buffer = output.target.buffer;
         if (!buffer || !buffer.byteLength) throw new Error("MP4ファイルを生成できませんでした。");
@@ -16059,7 +16063,8 @@ window.addEventListener("resize", () => {
         setTimeout(() => URL.revokeObjectURL(url), 10000);
         finishExportProgress("書き出し完了");
         setExportCompleteIndicator(true);
-        setFastTestStatus(`動画書き出し完了（${formatExportHms(outputDuration)}・${timingText}・${timingDetail}・${clipInfos.length}本連結・等速MP4・音声${audioFrameCount > 0 ? "あり" : "なし"}・${frameIndex}video/${audioFrameCount}audio）`);
+        completedStatusMessage = `動画書き出し完了（${formatExportHms(outputDuration)}・${timingText}・${timingDetail}・${clipInfos.length}本連結・等速MP4・音声${audioFrameCount > 0 ? "あり" : "なし"}・${frameIndex}video/${audioFrameCount}audio）`;
+        setFastTestStatus(completedStatusMessage);
       }
     } catch (e) {
       console.error("Road Ride Layer export error:", e);
@@ -16111,6 +16116,8 @@ window.addEventListener("resize", () => {
       if (fastEqualButton) fastEqualButton.disabled = false;
       if (fastTestButton) fastTestButton.disabled = false;
       if (exportButton) exportButton.disabled = false;
+      // 元動画への復帰でステータスが上書きされた場合も、完了詳細を残す。
+      if (completedStatusMessage) setFastTestStatus(completedStatusMessage);
     }
   }
 
