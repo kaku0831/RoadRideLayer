@@ -15836,6 +15836,10 @@ window.addEventListener("resize", () => {
           // 音声処理時間を「パケット検索」「読み出し待ち」「出力追加待ち」「UI更新」に分けて計測する。
           let audioLookupMs = 0;
           let audioReadWaitMs = 0;
+          let audioReadWaitMaxMs = 0;
+          let audioReadWaitOver100Ms = 0;
+          let audioReadWaitCount = 0;
+          let audioPacketBytes = 0;
           let audioAddWaitMs = 0;
           let audioPacketPrepMs = 0;
           let audioUiYieldMs = 0;
@@ -15867,7 +15871,12 @@ window.addEventListener("resize", () => {
                 let previousPacketStepEnd = performance.now();
                 for await (const packet of audioSink.packets(startPacket, endPacket)) {
                   const packetReadyAt = performance.now();
-                  audioReadWaitMs += Math.max(0, packetReadyAt - previousPacketStepEnd);
+                  const packetReadWaitMs = Math.max(0, packetReadyAt - previousPacketStepEnd);
+                  audioReadWaitMs += packetReadWaitMs;
+                  audioReadWaitMaxMs = Math.max(audioReadWaitMaxMs, packetReadWaitMs);
+                  if (packetReadWaitMs > 100) audioReadWaitOver100Ms++;
+                  audioReadWaitCount++;
+                  audioPacketBytes += Number(packet.byteLength) || 0;
                   if (packet.timestamp < localStart - 0.000001) {
                     previousPacketStepEnd = performance.now();
                     continue;
@@ -15954,6 +15963,10 @@ window.addEventListener("resize", () => {
             mode: audioCopyMode ? "パケットコピー" : "再エンコード",
             lookupSeconds: audioLookupMs / 1000,
             readWaitSeconds: audioReadWaitMs / 1000,
+            readWaitAverageMs: audioReadWaitCount ? audioReadWaitMs / audioReadWaitCount : 0,
+            readWaitMaxMs: audioReadWaitMaxMs,
+            readWaitOver100Ms: audioReadWaitOver100Ms,
+            packetBytes: audioPacketBytes,
             addWaitSeconds: audioAddWaitMs / 1000,
             prepSeconds: audioPacketPrepMs / 1000,
             uiYieldSeconds: audioUiYieldMs / 1000
@@ -15992,7 +16005,7 @@ window.addEventListener("resize", () => {
         ? audioClipTimings.map(item => {
             const base = `${item.clip}本目 ${formatElapsed(item.seconds)}（${item.mode}・${item.samples}${item.mode === "パケットコピー" ? "パケット" : "サンプル"}`;
             return item.mode === "パケットコピー"
-              ? `${base}・検索 ${formatElapsed(item.lookupSeconds)}・読出待ち ${formatElapsed(item.readWaitSeconds)}・出力待ち ${formatElapsed(item.addWaitSeconds)}・準備 ${formatElapsed(item.prepSeconds)}・UI ${formatElapsed(item.uiYieldSeconds)}）`
+              ? `${base}・検索 ${formatElapsed(item.lookupSeconds)}・読出待ち ${formatElapsed(item.readWaitSeconds)}（平均 ${Math.round(item.readWaitAverageMs)}ms／最大 ${Math.round(item.readWaitMaxMs)}ms／100ms超 ${item.readWaitOver100Ms}回／データ ${(item.packetBytes / 1048576).toFixed(1)}MB）・出力待ち ${formatElapsed(item.addWaitSeconds)}・準備 ${formatElapsed(item.prepSeconds)}・UI ${formatElapsed(item.uiYieldSeconds)}）`
               : `${base}）`;
           }).join("・")
         : "対象音声なし";
