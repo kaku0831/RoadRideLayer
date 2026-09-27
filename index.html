@@ -15531,7 +15531,7 @@ window.addEventListener("resize", () => {
       if (exportVideo) exportVideo.pause();
 
       const MB = await loadMediabunny();
-      const required = ["Input", "BlobSource", "ALL_FORMATS", "VideoSampleSink", "AudioSampleSink", "Output", "BufferTarget", "StreamTarget", "Mp4OutputFormat", "CanvasSource", "AudioSampleSource"];
+      const required = ["Input", "BlobSource", "ALL_FORMATS", "VideoSampleSink", "AudioSampleSink", "EncodedPacketSink", "Output", "BufferTarget", "StreamTarget", "Mp4OutputFormat", "CanvasSource", "AudioSampleSource", "EncodedAudioPacketSource"];
       const missing = required.filter(k => !MB?.[k]);
       if (missing.length) throw new Error("Mediabunny APIが不足しています: " + missing.join(", "));
 
@@ -15636,26 +15636,43 @@ window.addEventListener("resize", () => {
       });
       output.addVideoTrack(videoSource, { frameRate: fps });
 
-      // 音声ソースは全クリップ共通。各クリップの元タイムスタンプを
-      // プロジェクト時間へ変換して、1本の連続したAACトラックへ追加する。
+      // 1本のAAC動画を全尺で書き出す場合は、音声をデコード・再エンコードせず
+      // AACパケットをそのままMP4へコピーする。カット／複数クリップ／非AACは従来方式。
       let audioReady = false;
+      let audioCopyMode = false;
+      let audioDecoderConfig = null;
       if (firstAudioTrack) {
-        const channels = await firstAudioTrack.getNumberOfChannels();
-        const sampleRate = await firstAudioTrack.getSampleRate();
-        let canEncodeAac = true;
-        try {
-          canEncodeAac = typeof MB.canEncodeAudio === "function"
-            ? await MB.canEncodeAudio("aac", { numberOfChannels: channels, sampleRate, bitrate: 128000 })
-            : true;
-        } catch (_) {}
-        if (canEncodeAac) {
-          audioSource = new MB.AudioSampleSource({
-            codec: "aac",
-            bitrate: 128000,
-            transform: { numberOfChannels: channels, sampleRate }
-          });
-          output.addAudioTrack(audioSource);
-          audioReady = true;
+        const singleFullClip = clipInfos.length === 1
+          && projectStart <= 0.001
+          && projectEnd >= clipInfos[0].duration - 0.001;
+        const firstAudioCodec = await firstAudioTrack.getCodec();
+        if (singleFullClip && firstAudioCodec === "aac") {
+          try { audioDecoderConfig = await firstAudioTrack.getDecoderConfig(); } catch (_) {}
+          if (audioDecoderConfig?.codec) {
+            audioSource = new MB.EncodedAudioPacketSource("aac");
+            output.addAudioTrack(audioSource);
+            audioReady = true;
+            audioCopyMode = true;
+          }
+        }
+        if (!audioCopyMode) {
+          const channels = await firstAudioTrack.getNumberOfChannels();
+          const sampleRate = await firstAudioTrack.getSampleRate();
+          let canEncodeAac = true;
+          try {
+            canEncodeAac = typeof MB.canEncodeAudio === "function"
+              ? await MB.canEncodeAudio("aac", { numberOfChannels: channels, sampleRate, bitrate: 128000 })
+              : true;
+          } catch (_) {}
+          if (canEncodeAac) {
+            audioSource = new MB.AudioSampleSource({
+              codec: "aac",
+              bitrate: 128000,
+              transform: { numberOfChannels: channels, sampleRate }
+            });
+            output.addAudioTrack(audioSource);
+            audioReady = true;
+          }
         }
       }
 
@@ -15797,13 +15814,13 @@ window.addEventListener("resize", () => {
       exportVideoElapsed = (performance.now() - exportProcessingStart) / 1000 - exportOutputStartElapsed;
       exportEncodeElapsed = Math.max(0, exportVideoElapsed - exportRenderElapsed);
 
-      // 映像と同じプロジェクト時間軸で、各クリップの音声を順番に追加。
-      // クリップ間は空白を作らず、カット範囲に重なる音声だけをAAC化する。
+      // 映像と同じプロジェクト時間軸で音声を追加。
+      // 条件を満たす単一AACクリップはパケットコピー、それ以外は従来どおりAACへ再エンコード。
       const audioClipTimings = [];
       if (audioReady && audioSource) {
         let projectCursorAudio = 0;
-        setExportProgress(99, "音声を処理しています…");
-        setFastTestStatus("動画の映像処理が完了しました。音声を処理しています…");
+        setExportProgress(99, audioCopyMode ? "音声をコピーしています…" : "音声を処理しています…");
+        setFastTestStatus(audioCopyMode ? "映像処理が完了しました。音声をコピーしています…" : "動画の映像処理が完了しました。音声を処理しています…");
         for (let i = 0; i < clipInfos.length; i++) {
           const info = clipInfos[i];
           const clipProjectStart = projectCursorAudio;
@@ -15818,10 +15835,29 @@ window.addEventListener("resize", () => {
           const audioClipStart = performance.now();
           let clipAudioSampleCount = 0;
           let lastAudioUiUpdate = audioClipStart;
-          setExportProgress(99, `音声処理中（${i + 1}/${clipInfos.length}本目）`);
-          setFastTestStatus(`音声処理中（${i + 1}/${clipInfos.length}本目）…`);
-          const audioSink = new MB.AudioSampleSink(info.audioTrack);
+          const audioProgressLabel = audioCopyMode ? "音声コピー中" : "音声処理中";
+          setExportProgress(99, `${audioProgressLabel}（${i + 1}/${clipInfos.length}本目）`);
+          setFastTestStatus(`${audioProgressLabel}（${i + 1}/${clipInfos.length}本目）…`);
+          const audioSink = audioCopyMode
+            ? new MB.EncodedPacketSink(info.audioTrack)
+            : new MB.AudioSampleSink(info.audioTrack);
           try {
+            if (audioCopyMode) {
+              let firstAudioPacket = true;
+              for await (const packet of audioSink.packets()) {
+                await audioSource.add(packet, firstAudioPacket ? { decoderConfig: audioDecoderConfig } : undefined);
+                firstAudioPacket = false;
+                audioFrameCount++;
+                clipAudioSampleCount++;
+                const now = performance.now();
+                if (now - lastAudioUiUpdate >= 1000) {
+                  setExportProgress(99, `音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）`);
+                  setFastTestStatus(`音声コピー中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}パケット）…`);
+                  lastAudioUiUpdate = now;
+                  await new Promise(resolve => setTimeout(resolve, 0));
+                }
+              }
+            } else {
             for await (const sample of audioSink.samples(localStart, localEnd)) {
               if (!sample) continue;
               const sampleStart = sample.timestamp;
@@ -15865,10 +15901,11 @@ window.addEventListener("resize", () => {
                 await new Promise(resolve => setTimeout(resolve, 0));
               }
             }
+            }
           } finally {
             try { audioSink.dispose?.(); } catch (_) {}
           }
-          audioClipTimings.push({ clip: i + 1, seconds: (performance.now() - audioClipStart) / 1000, samples: clipAudioSampleCount });
+          audioClipTimings.push({ clip: i + 1, seconds: (performance.now() - audioClipStart) / 1000, samples: clipAudioSampleCount, mode: audioCopyMode ? "パケットコピー" : "再エンコード" });
         }
         audioSource.close();
         audioSource = null;
@@ -15900,7 +15937,7 @@ window.addEventListener("resize", () => {
       const timingText = `書き出し時間 ${formatElapsed(exportElapsedSec)}・実時間比 ${realtimeRatio.toFixed(2)}倍`;
       const breakdown = window.__rvlExportBreakdown || {};
       const audioClipTimingText = audioClipTimings.length
-        ? audioClipTimings.map(item => `${item.clip}本目 ${formatElapsed(item.seconds)}（${item.samples}サンプル）`).join("・")
+        ? audioClipTimings.map(item => `${item.clip}本目 ${formatElapsed(item.seconds)}（${item.mode}・${item.samples}${item.mode === "パケットコピー" ? "パケット" : "サンプル"}）`).join("・")
         : "対象音声なし";
       const timingDetail = `内訳：開始 ${formatElapsed(exportOutputStartElapsed)} / 映像 ${formatElapsed(exportVideoElapsed)}（描画 ${formatElapsed(exportRenderElapsed)}・エンコード ${formatElapsed(exportEncodeElapsed)}） / 描画詳細：更新 ${formatElapsed(breakdown.overlayUpdate || 0)}・PWRグラフ ${formatElapsed(breakdown.powerGraph || 0)}・標高+PWR ${formatElapsed(breakdown.combinedGraph || 0)}・元映像 ${formatElapsed(breakdown.videoDraw || 0)}・レイヤー ${formatElapsed(breakdown.layers || 0)}（ロゴ ${formatElapsed(breakdown.logo || 0)}・MAP ${formatElapsed(breakdown.map || 0)}・温度 ${formatElapsed(breakdown.temperature || 0)}・POWER ${formatElapsed(breakdown.power || 0)}・HR ${formatElapsed(breakdown.heartRate || 0)}・CAD ${formatElapsed(breakdown.cadence || 0)}・速度 ${formatElapsed(breakdown.speed || 0)}・斜度 ${formatElapsed(breakdown.grade || 0)}・標高 ${formatElapsed(breakdown.altitude || 0)}・距離 ${formatElapsed(breakdown.distance || 0)}・ギア ${formatElapsed(breakdown.gear || 0)}・時刻 ${formatElapsed(breakdown.currentTime || 0)}・LAP ${formatElapsed(breakdown.lapTimer || 0)}・PWRグラフ描画 ${formatElapsed(breakdown.powerGraphLayer || 0)}・標高+PWR描画 ${formatElapsed(breakdown.combinedProfileLayer || 0)}) / MAP詳細：更新準備 ${formatElapsed(breakdown.mapUpdateEnsure || 0)}・ルート抽出 ${formatElapsed(breakdown.mapUpdatePoints || 0)}・現在位置 ${formatElapsed(breakdown.mapUpdatePosition || 0)}・地図移動/ズーム ${formatElapsed(breakdown.mapUpdateView || 0)}・タイル描画 ${formatElapsed(breakdown.mapDrawTiles || 0)}・ルート描画 ${formatElapsed(breakdown.mapDrawRoute || 0)}・ラベル ${formatElapsed(breakdown.mapDrawLabel || 0)} / 音声 ${formatElapsed(exportAudioElapsed)}（クリップ別：${audioClipTimingText}） / 完成処理 ${formatElapsed(exportFinalizeElapsed)}`;
 
