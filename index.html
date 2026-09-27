@@ -15799,8 +15799,11 @@ window.addEventListener("resize", () => {
 
       // 映像と同じプロジェクト時間軸で、各クリップの音声を順番に追加。
       // クリップ間は空白を作らず、カット範囲に重なる音声だけをAAC化する。
+      const audioClipTimings = [];
       if (audioReady && audioSource) {
         let projectCursorAudio = 0;
+        setExportProgress(99, "音声を処理しています…");
+        setFastTestStatus("動画の映像処理が完了しました。音声を処理しています…");
         for (let i = 0; i < clipInfos.length; i++) {
           const info = clipInfos[i];
           const clipProjectStart = projectCursorAudio;
@@ -15812,6 +15815,11 @@ window.addEventListener("resize", () => {
           const localEnd = Math.min(info.duration, projectEnd - clipProjectStart);
           if (localEnd <= localStart + 0.000001) continue;
 
+          const audioClipStart = performance.now();
+          let clipAudioSampleCount = 0;
+          let lastAudioUiUpdate = audioClipStart;
+          setExportProgress(99, `音声処理中（${i + 1}/${clipInfos.length}本目）`);
+          setFastTestStatus(`音声処理中（${i + 1}/${clipInfos.length}本目）…`);
           const audioSink = new MB.AudioSampleSink(info.audioTrack);
           try {
             for await (const sample of audioSink.samples(localStart, localEnd)) {
@@ -15847,10 +15855,20 @@ window.addEventListener("resize", () => {
               await audioSource.add(outSample);
               outSample.close();
               audioFrameCount++;
+              clipAudioSampleCount++;
+
+              const now = performance.now();
+              if (now - lastAudioUiUpdate >= 1000) {
+                setExportProgress(99, `音声処理中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}サンプル）`);
+                setFastTestStatus(`音声処理中（${i + 1}/${clipInfos.length}本目・${clipAudioSampleCount}サンプル）…`);
+                lastAudioUiUpdate = now;
+                await new Promise(resolve => setTimeout(resolve, 0));
+              }
             }
           } finally {
             try { audioSink.dispose?.(); } catch (_) {}
           }
+          audioClipTimings.push({ clip: i + 1, seconds: (performance.now() - audioClipStart) / 1000, samples: clipAudioSampleCount });
         }
         audioSource.close();
         audioSource = null;
@@ -15881,7 +15899,10 @@ window.addEventListener("resize", () => {
         : 0;
       const timingText = `書き出し時間 ${formatElapsed(exportElapsedSec)}・実時間比 ${realtimeRatio.toFixed(2)}倍`;
       const breakdown = window.__rvlExportBreakdown || {};
-      const timingDetail = `内訳：開始 ${formatElapsed(exportOutputStartElapsed)} / 映像 ${formatElapsed(exportVideoElapsed)}（描画 ${formatElapsed(exportRenderElapsed)}・エンコード ${formatElapsed(exportEncodeElapsed)}） / 描画詳細：更新 ${formatElapsed(breakdown.overlayUpdate || 0)}・PWRグラフ ${formatElapsed(breakdown.powerGraph || 0)}・標高+PWR ${formatElapsed(breakdown.combinedGraph || 0)}・元映像 ${formatElapsed(breakdown.videoDraw || 0)}・レイヤー ${formatElapsed(breakdown.layers || 0)}（ロゴ ${formatElapsed(breakdown.logo || 0)}・MAP ${formatElapsed(breakdown.map || 0)}・温度 ${formatElapsed(breakdown.temperature || 0)}・POWER ${formatElapsed(breakdown.power || 0)}・HR ${formatElapsed(breakdown.heartRate || 0)}・CAD ${formatElapsed(breakdown.cadence || 0)}・速度 ${formatElapsed(breakdown.speed || 0)}・斜度 ${formatElapsed(breakdown.grade || 0)}・標高 ${formatElapsed(breakdown.altitude || 0)}・距離 ${formatElapsed(breakdown.distance || 0)}・ギア ${formatElapsed(breakdown.gear || 0)}・時刻 ${formatElapsed(breakdown.currentTime || 0)}・LAP ${formatElapsed(breakdown.lapTimer || 0)}・PWRグラフ描画 ${formatElapsed(breakdown.powerGraphLayer || 0)}・標高+PWR描画 ${formatElapsed(breakdown.combinedProfileLayer || 0)}) / MAP詳細：更新準備 ${formatElapsed(breakdown.mapUpdateEnsure || 0)}・ルート抽出 ${formatElapsed(breakdown.mapUpdatePoints || 0)}・現在位置 ${formatElapsed(breakdown.mapUpdatePosition || 0)}・地図移動/ズーム ${formatElapsed(breakdown.mapUpdateView || 0)}・タイル描画 ${formatElapsed(breakdown.mapDrawTiles || 0)}・ルート描画 ${formatElapsed(breakdown.mapDrawRoute || 0)}・ラベル ${formatElapsed(breakdown.mapDrawLabel || 0)} / 音声 ${formatElapsed(exportAudioElapsed)} / 完成処理 ${formatElapsed(exportFinalizeElapsed)}`;
+      const audioClipTimingText = audioClipTimings.length
+        ? audioClipTimings.map(item => `${item.clip}本目 ${formatElapsed(item.seconds)}（${item.samples}サンプル）`).join("・")
+        : "対象音声なし";
+      const timingDetail = `内訳：開始 ${formatElapsed(exportOutputStartElapsed)} / 映像 ${formatElapsed(exportVideoElapsed)}（描画 ${formatElapsed(exportRenderElapsed)}・エンコード ${formatElapsed(exportEncodeElapsed)}） / 描画詳細：更新 ${formatElapsed(breakdown.overlayUpdate || 0)}・PWRグラフ ${formatElapsed(breakdown.powerGraph || 0)}・標高+PWR ${formatElapsed(breakdown.combinedGraph || 0)}・元映像 ${formatElapsed(breakdown.videoDraw || 0)}・レイヤー ${formatElapsed(breakdown.layers || 0)}（ロゴ ${formatElapsed(breakdown.logo || 0)}・MAP ${formatElapsed(breakdown.map || 0)}・温度 ${formatElapsed(breakdown.temperature || 0)}・POWER ${formatElapsed(breakdown.power || 0)}・HR ${formatElapsed(breakdown.heartRate || 0)}・CAD ${formatElapsed(breakdown.cadence || 0)}・速度 ${formatElapsed(breakdown.speed || 0)}・斜度 ${formatElapsed(breakdown.grade || 0)}・標高 ${formatElapsed(breakdown.altitude || 0)}・距離 ${formatElapsed(breakdown.distance || 0)}・ギア ${formatElapsed(breakdown.gear || 0)}・時刻 ${formatElapsed(breakdown.currentTime || 0)}・LAP ${formatElapsed(breakdown.lapTimer || 0)}・PWRグラフ描画 ${formatElapsed(breakdown.powerGraphLayer || 0)}・標高+PWR描画 ${formatElapsed(breakdown.combinedProfileLayer || 0)}) / MAP詳細：更新準備 ${formatElapsed(breakdown.mapUpdateEnsure || 0)}・ルート抽出 ${formatElapsed(breakdown.mapUpdatePoints || 0)}・現在位置 ${formatElapsed(breakdown.mapUpdatePosition || 0)}・地図移動/ズーム ${formatElapsed(breakdown.mapUpdateView || 0)}・タイル描画 ${formatElapsed(breakdown.mapDrawTiles || 0)}・ルート描画 ${formatElapsed(breakdown.mapDrawRoute || 0)}・ラベル ${formatElapsed(breakdown.mapDrawLabel || 0)} / 音声 ${formatElapsed(exportAudioElapsed)}（クリップ別：${audioClipTimingText}） / 完成処理 ${formatElapsed(exportFinalizeElapsed)}`;
 
       if (streamingToDisk) {
         // StreamTargetはfinalize()完了時にWritableStreamも閉じる。
