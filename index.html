@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;600;700;900&family=Roboto+Condensed:wght@400;600;700;900&family=Titillium+Web:wght@400;600;700;900&family=Oswald:wght@400;600;700&family=Teko:wght@400;600;700&family=Jost:wght@400;600;700;900&family=Montserrat:wght@400;600;700;900&family=Playfair+Display:wght@400;600;700;900&family=Bodoni+Moda:wght@400;600;700;900&family=Noto+Serif+Display:wght@400;600;700;900&family=Lora:wght@400;600;700&family=EB+Garamond:wght@400;600;700;800&display=swap" rel="stylesheet">
 <title>Road Video Layer</title>
 
 <style>
@@ -13744,7 +13747,7 @@ document.addEventListener("DOMContentLoaded", () => {
     </div>
     <div class="rvl-style-dialog-note">数値フォントを選択します。レイヤーの数値表示に反映されます。</div>
     <div class="rvl-font-grid" id="numberFontGrid">
-      <button type="button" class="rvl-font-option" data-font-name="Barlow Semi Condensed" data-font-stack='"Arial Narrow","Bahnschrift SemiCondensed","Roboto Condensed",Arial,sans-serif'>
+      <button type="button" class="rvl-font-option" data-font-name="Barlow Semi Condensed" data-font-stack='"Barlow Semi Condensed","Arial Narrow","Bahnschrift SemiCondensed",Arial,sans-serif'>
         <span class="rvl-font-preview">123 456</span><span class="rvl-font-name">Barlow Semi Condensed</span>
       </button>
       <button type="button" class="rvl-font-option" data-font-name="Roboto Condensed" data-font-stack='"Roboto Condensed","Arial Narrow",Arial,sans-serif'>
@@ -13798,15 +13801,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const FONT_STORAGE_KEY = "roadVideoLayerNumberFontV1";
   const DEFAULT_FONT_STACK = 'Arial, sans-serif';
 
+  // Each sample always previews its own font, independently of the selected font.
+  fontOptions.forEach(option => {
+    const preview = option.querySelector(".rvl-font-preview");
+    if (preview && option.dataset.fontStack) {
+      preview.style.fontFamily = option.dataset.fontStack;
+    }
+  });
+
   function applyNumberFont(stack, name) {
     const root = document.querySelector(".video-container");
     if (root) {
       root.style.setProperty("--rvl-number-font", stack || DEFAULT_FONT_STACK);
     }
-
-    document.querySelectorAll(".rvl-font-preview").forEach(preview => {
-      preview.style.fontFamily = stack || DEFAULT_FONT_STACK;
-    });
 
     fontOptions.forEach(option => {
       option.classList.toggle("selected", option.dataset.fontStack === stack);
