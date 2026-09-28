@@ -2225,6 +2225,20 @@ button:disabled {
   white-space:nowrap;
   overflow:hidden;
 }
+
+/* Force each font card to preview its own typeface. */
+.rvl-font-option[data-font-name="Barlow Semi Condensed"] .rvl-font-preview{font-family:"Barlow Semi Condensed", sans-serif !important;}
+.rvl-font-option[data-font-name="Roboto Condensed"] .rvl-font-preview{font-family:"Roboto Condensed", sans-serif !important;}
+.rvl-font-option[data-font-name="Titillium Web"] .rvl-font-preview{font-family:"Titillium Web", sans-serif !important;}
+.rvl-font-option[data-font-name="Oswald"] .rvl-font-preview{font-family:"Oswald", sans-serif !important;}
+.rvl-font-option[data-font-name="Teko"] .rvl-font-preview{font-family:"Teko", sans-serif !important;}
+.rvl-font-option[data-font-name="Jost"] .rvl-font-preview{font-family:"Jost", sans-serif !important;}
+.rvl-font-option[data-font-name="Montserrat"] .rvl-font-preview{font-family:"Montserrat", sans-serif !important;}
+.rvl-font-option[data-font-name="Playfair Display"] .rvl-font-preview{font-family:"Playfair Display", serif !important;}
+.rvl-font-option[data-font-name="Bodoni Moda"] .rvl-font-preview{font-family:"Bodoni Moda", serif !important;}
+.rvl-font-option[data-font-name="Noto Serif Display"] .rvl-font-preview{font-family:"Noto Serif Display", serif !important;}
+.rvl-font-option[data-font-name="Lora"] .rvl-font-preview{font-family:"Lora", serif !important;}
+.rvl-font-option[data-font-name="EB Garamond"] .rvl-font-preview{font-family:"EB Garamond", serif !important;}
 .rvl-font-name{
   display:block;
   color:#aaa;
@@ -13805,7 +13819,8 @@ document.addEventListener("DOMContentLoaded", () => {
   fontOptions.forEach(option => {
     const preview = option.querySelector(".rvl-font-preview");
     if (preview && option.dataset.fontStack) {
-      preview.style.fontFamily = option.dataset.fontStack;
+      // Inline important prevents other app styles from overriding the preview.
+      preview.style.setProperty("font-family", option.dataset.fontStack, "important");
     }
   });
 
