@@ -3703,6 +3703,125 @@ button:disabled,
 
 
 
+
+<style id="graph-touch-resize-improved">
+/* パワーグラフ／標高グラフ：角ハンドルを廃止し、辺のタッチ領域を拡大。
+   上下＝高さ、左右＝幅。ピンチ操作は既存の実装を維持。 */
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle {
+  box-sizing: border-box !important;
+  z-index: 1000 !important;
+  touch-action: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-n,
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-s,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-n,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-s {
+  display: block !important;
+  left: 50% !important;
+  width: min(68%, 280px) !important;
+  min-width: 100px !important;
+  max-width: 280px !important;
+  height: 44px !important;
+  min-height: 44px !important;
+  max-height: 44px !important;
+  transform: translateX(-50%) !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 22px !important;
+  box-shadow: none !important;
+  cursor: ns-resize !important;
+}
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-n,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-n {
+  top: -22px !important;
+  bottom: auto !important;
+}
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-s,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-s {
+  bottom: -22px !important;
+  top: auto !important;
+}
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-w,
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-e,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-w,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-e {
+  display: block !important;
+  top: 50% !important;
+  width: 44px !important;
+  min-width: 44px !important;
+  max-width: 44px !important;
+  height: min(68%, 280px) !important;
+  min-height: 100px !important;
+  max-height: 280px !important;
+  transform: translateY(-50%) !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 22px !important;
+  box-shadow: none !important;
+  cursor: ew-resize !important;
+}
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-w,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-w {
+  left: -22px !important;
+  right: auto !important;
+}
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-e,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-e {
+  right: -22px !important;
+  left: auto !important;
+}
+/* タッチ領域は大きく、見た目のつまみは細くしてグラフを隠しにくくする */
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-n::after,
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-s::after,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-n::after,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-s::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 58px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+  border-radius: 8px;
+  background: #4d4398;
+  border: 1px solid rgba(255,255,255,.95);
+  box-shadow: 0 1px 4px rgba(0,0,0,.35);
+  pointer-events: none;
+}
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-w::after,
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-e::after,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-w::after,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-e::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 58px;
+  transform: translate(-50%, -50%);
+  border-radius: 8px;
+  background: #4d4398;
+  border: 1px solid rgba(255,255,255,.95);
+  box-shadow: 0 1px 4px rgba(0,0,0,.35);
+  pointer-events: none;
+}
+/* 角からのリサイズは使わない（ピンチで縦横同時に拡大・縮小） */
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-nw,
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-ne,
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-sw,
+.video-container.layer-editing .power-graph.layer-selected .layer-resize-handle.resize-se,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-nw,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-ne,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-sw,
+.video-container.layer-editing .combined-profile-graph.layer-selected .layer-resize-handle.resize-se {
+  display: none !important;
+  pointer-events: none !important;
+}
+</style>
+
 </head>
 
 <body>
