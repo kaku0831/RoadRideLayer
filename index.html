@@ -15637,8 +15637,8 @@ window.addEventListener("resize", () => {
       return;
     }
 
-    // 大容量書き出しでは最初のawaitより前に保存先を確保する。
-    // これによりshowSaveFilePickerのユーザー操作権限を確実に維持する。
+    // 対応ブラウザでは、容量にかかわらず書き出し前に保存先を選択する。
+    // showSaveFilePickerはユーザー操作権限が必要なため、最初のawaitより前に呼び出す。
     const preTotalDuration = Number(getTotalVideoDuration());
     let preTrimStartMs = Number(window.videoTrimStartMs);
     let preTrimEndMs = Number(window.videoTrimEndMs);
@@ -15649,21 +15649,21 @@ window.addEventListener("resize", () => {
     const preEstimatedBytes = preOutputDuration * (preBitrateMbps + 0.128) * 1000000 / 8;
     // BufferTargetは完成ファイル全体をメモリに保持するため、Android端末では
     // 1GB前後でも Array buffer allocation failed になることがある。
-    // 保存先を選べる環境では、推定512MiB以上をディスクへ直接ストリームする。
-    // File System Access APIがない環境では従来の大容量上限を維持する。
-    const STREAM_EXPORT_THRESHOLD = 512 * 1024 * 1024;
+    // 保存先選択に対応したブラウザでは、毎回先に保存先を選び、
+    // 小容量でもStreamTargetで直接書き込む。これにより保存先とファイル名を
+    // 書き出し開始前に確定し、完成ファイル全体をメモリに保持しない。
     const LARGE_EXPORT_THRESHOLD = 1.25 * 1024 * 1024 * 1024;
     const canStreamToDisk = typeof window.showSaveFilePicker === "function";
-    if (preEstimatedBytes >= STREAM_EXPORT_THRESHOLD && canStreamToDisk) {
+    if (canStreamToDisk) {
       streamFileHandle = await window.showSaveFilePicker({
         suggestedName: "RoadRideLayer.mp4",
         types: [{ description: "MP4動画", accept: { "video/mp4": [".mp4"] } }]
       });
       streamWritable = await streamFileHandle.createWritable();
       streamingToDisk = true;
-      setFastTestStatus(`ディスク直接書き出しモード：約${(preEstimatedBytes / (1024 ** 3)).toFixed(1)} GB（メモリ使用量を抑制）`);
+      setFastTestStatus(`保存先を確定しました。ディスク直接書き出しモード：約${(preEstimatedBytes / (1024 ** 3)).toFixed(1)} GB`);
     } else if (preEstimatedBytes >= LARGE_EXPORT_THRESHOLD) {
-      throw new Error("大容量動画の書き出しには、ファイル保存に対応したChromeが必要です。");
+      throw new Error("このブラウザでは保存先を事前指定できず、大容量動画を安全に書き出せません。PC版Chromeなど、ファイル保存に対応した環境を使用してください。");
     }
 
     await new Promise(r => setTimeout(r, 0));
