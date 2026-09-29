@@ -3,9 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;600;700;900&family=Roboto+Condensed:wght@400;600;700;900&family=Titillium+Web:wght@400;600;700;900&family=Oswald:wght@400;600;700&family=Teko:wght@400;600;700&family=Jost:wght@400;600;700;900&family=Montserrat:wght@400;600;700;900&family=Playfair+Display:wght@400;600;700;900&family=Bodoni+Moda:wght@400;600;700;900&family=Noto+Serif+Display:wght@400;600;700;900&family=Lora:wght@400;600;700&family=EB+Garamond:wght@400;600;700;800&display=swap" rel="stylesheet">
 <title>Road Video Layer</title>
 
 <style>
@@ -2225,20 +2222,6 @@ button:disabled {
   white-space:nowrap;
   overflow:hidden;
 }
-
-/* Force each font card to preview its own typeface. */
-.rvl-font-option[data-font-name="Barlow Semi Condensed"] .rvl-font-preview{font-family:"Barlow Semi Condensed", sans-serif !important;}
-.rvl-font-option[data-font-name="Roboto Condensed"] .rvl-font-preview{font-family:"Roboto Condensed", sans-serif !important;}
-.rvl-font-option[data-font-name="Titillium Web"] .rvl-font-preview{font-family:"Titillium Web", sans-serif !important;}
-.rvl-font-option[data-font-name="Oswald"] .rvl-font-preview{font-family:"Oswald", sans-serif !important;}
-.rvl-font-option[data-font-name="Teko"] .rvl-font-preview{font-family:"Teko", sans-serif !important;}
-.rvl-font-option[data-font-name="Jost"] .rvl-font-preview{font-family:"Jost", sans-serif !important;}
-.rvl-font-option[data-font-name="Montserrat"] .rvl-font-preview{font-family:"Montserrat", sans-serif !important;}
-.rvl-font-option[data-font-name="Playfair Display"] .rvl-font-preview{font-family:"Playfair Display", serif !important;}
-.rvl-font-option[data-font-name="Bodoni Moda"] .rvl-font-preview{font-family:"Bodoni Moda", serif !important;}
-.rvl-font-option[data-font-name="Noto Serif Display"] .rvl-font-preview{font-family:"Noto Serif Display", serif !important;}
-.rvl-font-option[data-font-name="Lora"] .rvl-font-preview{font-family:"Lora", serif !important;}
-.rvl-font-option[data-font-name="EB Garamond"] .rvl-font-preview{font-family:"EB Garamond", serif !important;}
 .rvl-font-name{
   display:block;
   color:#aaa;
@@ -13761,7 +13744,7 @@ document.addEventListener("DOMContentLoaded", () => {
     </div>
     <div class="rvl-style-dialog-note">数値フォントを選択します。レイヤーの数値表示に反映されます。</div>
     <div class="rvl-font-grid" id="numberFontGrid">
-      <button type="button" class="rvl-font-option" data-font-name="Barlow Semi Condensed" data-font-stack='"Barlow Semi Condensed","Arial Narrow","Bahnschrift SemiCondensed",Arial,sans-serif'>
+      <button type="button" class="rvl-font-option" data-font-name="Barlow Semi Condensed" data-font-stack='"Arial Narrow","Bahnschrift SemiCondensed","Roboto Condensed",Arial,sans-serif'>
         <span class="rvl-font-preview">123 456</span><span class="rvl-font-name">Barlow Semi Condensed</span>
       </button>
       <button type="button" class="rvl-font-option" data-font-name="Roboto Condensed" data-font-stack='"Roboto Condensed","Arial Narrow",Arial,sans-serif'>
@@ -13815,20 +13798,15 @@ document.addEventListener("DOMContentLoaded", () => {
   const FONT_STORAGE_KEY = "roadVideoLayerNumberFontV1";
   const DEFAULT_FONT_STACK = 'Arial, sans-serif';
 
-  // Each sample always previews its own font, independently of the selected font.
-  fontOptions.forEach(option => {
-    const preview = option.querySelector(".rvl-font-preview");
-    if (preview && option.dataset.fontStack) {
-      // Inline important prevents other app styles from overriding the preview.
-      preview.style.setProperty("font-family", option.dataset.fontStack, "important");
-    }
-  });
-
   function applyNumberFont(stack, name) {
     const root = document.querySelector(".video-container");
     if (root) {
       root.style.setProperty("--rvl-number-font", stack || DEFAULT_FONT_STACK);
     }
+
+    document.querySelectorAll(".rvl-font-preview").forEach(preview => {
+      preview.style.fontFamily = stack || DEFAULT_FONT_STACK;
+    });
 
     fontOptions.forEach(option => {
       option.classList.toggle("selected", option.dataset.fontStack === stack);
@@ -14513,10 +14491,13 @@ window.addEventListener("resize", () => {
       if (routeLayer && overlayMap) {
         const zoom = Number(overlayMap.getZoom());
         const center = overlayMap.getCenter?.();
+        const mapSize = overlayMap.getSize?.();
         const cache = window.__rvlExportMapRoutePathCache || (window.__rvlExportMapRoutePathCache = {
           routeLayer: null,
           zoom: null,
           center: null,
+          width: null,
+          height: null,
           path: null
         });
 
@@ -14530,7 +14511,10 @@ window.addEventListener("resize", () => {
             cache.routeLayer !== routeLayer ||
             cache.zoom !== zoom ||
             !cache.center ||
-            !cache.path;
+            !cache.path ||
+            !mapSize ||
+            cache.width !== mapSize.x ||
+            cache.height !== mapSize.y;
 
           if (needsRebuild) {
             let latlngs = routeLayer.getLatLngs();
@@ -14550,6 +14534,8 @@ window.addEventListener("resize", () => {
                 cache.routeLayer = routeLayer;
                 cache.zoom = zoom;
                 cache.center = { lat: center.lat, lng: center.lng };
+                cache.width = mapSize?.x ?? null;
+                cache.height = mapSize?.y ?? null;
                 cache.path = nextPath;
               }
             }
@@ -14558,10 +14544,13 @@ window.addEventListener("resize", () => {
           if (cache.path && cache.center) {
             path = cache.path;
             const baseCenter = L.latLng(cache.center.lat, cache.center.lng);
-            const basePoint = overlayMap.project(baseCenter, zoom);
-            const currentPoint = overlayMap.project(center, zoom);
-            shiftX = basePoint.x - currentPoint.x;
-            shiftY = basePoint.y - currentPoint.y;
+            // Use Leaflet's actual container coordinates for the shift. This avoids
+            // sub-pixel/pane-position differences between projected world pixels
+            // and the coordinates used to draw the exported map tiles.
+            const baseCenterPoint = overlayMap.latLngToContainerPoint(baseCenter);
+            const currentSize = overlayMap.getSize();
+            shiftX = baseCenterPoint.x - currentSize.x / 2;
+            shiftY = baseCenterPoint.y - currentSize.y / 2;
           }
         }
 
@@ -15637,8 +15626,8 @@ window.addEventListener("resize", () => {
       return;
     }
 
-    // 対応ブラウザでは、容量にかかわらず書き出し前に保存先を選択する。
-    // showSaveFilePickerはユーザー操作権限が必要なため、最初のawaitより前に呼び出す。
+    // 大容量書き出しでは最初のawaitより前に保存先を確保する。
+    // これによりshowSaveFilePickerのユーザー操作権限を確実に維持する。
     const preTotalDuration = Number(getTotalVideoDuration());
     let preTrimStartMs = Number(window.videoTrimStartMs);
     let preTrimEndMs = Number(window.videoTrimEndMs);
@@ -15649,21 +15638,21 @@ window.addEventListener("resize", () => {
     const preEstimatedBytes = preOutputDuration * (preBitrateMbps + 0.128) * 1000000 / 8;
     // BufferTargetは完成ファイル全体をメモリに保持するため、Android端末では
     // 1GB前後でも Array buffer allocation failed になることがある。
-    // 保存先選択に対応したブラウザでは、毎回先に保存先を選び、
-    // 小容量でもStreamTargetで直接書き込む。これにより保存先とファイル名を
-    // 書き出し開始前に確定し、完成ファイル全体をメモリに保持しない。
+    // 保存先を選べる環境では、推定512MiB以上をディスクへ直接ストリームする。
+    // File System Access APIがない環境では従来の大容量上限を維持する。
+    const STREAM_EXPORT_THRESHOLD = 512 * 1024 * 1024;
     const LARGE_EXPORT_THRESHOLD = 1.25 * 1024 * 1024 * 1024;
     const canStreamToDisk = typeof window.showSaveFilePicker === "function";
-    if (canStreamToDisk) {
+    if (preEstimatedBytes >= STREAM_EXPORT_THRESHOLD && canStreamToDisk) {
       streamFileHandle = await window.showSaveFilePicker({
         suggestedName: "RoadRideLayer.mp4",
         types: [{ description: "MP4動画", accept: { "video/mp4": [".mp4"] } }]
       });
       streamWritable = await streamFileHandle.createWritable();
       streamingToDisk = true;
-      setFastTestStatus(`保存先を確定しました。ディスク直接書き出しモード：約${(preEstimatedBytes / (1024 ** 3)).toFixed(1)} GB`);
+      setFastTestStatus(`ディスク直接書き出しモード：約${(preEstimatedBytes / (1024 ** 3)).toFixed(1)} GB（メモリ使用量を抑制）`);
     } else if (preEstimatedBytes >= LARGE_EXPORT_THRESHOLD) {
-      throw new Error("このブラウザでは保存先を事前指定できず、大容量動画を安全に書き出せません。PC版Chromeなど、ファイル保存に対応した環境を使用してください。");
+      throw new Error("大容量動画の書き出しには、ファイル保存に対応したChromeが必要です。");
     }
 
     await new Promise(r => setTimeout(r, 0));
