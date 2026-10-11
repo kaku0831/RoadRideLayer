@@ -6148,25 +6148,6 @@ function selectVideoClip(index, options = {}) {
 
     updateCustomVideoControls();
     updateOverlay();
-
-    // 複数動画では、現在選択中の動画が変わっても全レイヤーを
-    // 共通の保存済みレイアウトへ再適用する。
-    // 動画ごとの縦横比・表示サイズ更新後にも位置とサイズを揃える。
-    requestAnimationFrame(() => {
-      if (typeof updateVideoDisplaySize === "function") {
-        updateVideoDisplaySize();
-      }
-      if (typeof applyLayerLayout === "function") {
-        applyLayerLayout();
-      }
-      if (typeof resizePowerCanvas === "function") {
-        resizePowerCanvas();
-      }
-      if (typeof drawPowerGraph === "function") {
-        drawPowerGraph();
-      }
-    });
-
     updateTrimCurrentMarker(true);
     updateLapCurrentMarker();
     drawPowerGraph();
@@ -12978,11 +12959,21 @@ function applyLayerPixelPosition(layer, key, leftPx, topPx, cw, ch) {
     layout.top = topPx / ch * 100;
     layer.style.left = layout.left + "%";
     layer.style.top = layout.top + "%";
-  } else {
-    layout.left = leftPx;
-    delete layout.leftPx;
+  } else if (key === "temperature") {
+    // 気温レイヤーは右側配置なので、横位置を動画幅に対する%で保存する。
+    layout.left = leftPx / cw * 100;
     layout.top = topPx / ch * 100;
-    layer.style.left = leftPx + "px";
+    delete layout.leftPx;
+    layer.style.left = layout.left + "%";
+    layer.style.top = layout.top + "%";
+  } else {
+    // 左側の数値レイヤーは横位置をpxで保存する。
+    // leftにpx値を入れると、applyLayerLayout()で%として解釈されて
+    // 動画切替時に初期位置へ戻ったように見えるため、leftPxを維持する。
+    layout.leftPx = leftPx;
+    layout.top = topPx / ch * 100;
+    delete layout.left;
+    layer.style.left = layout.leftPx + "px";
     layer.style.top = layout.top + "%";
   }
 }
