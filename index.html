@@ -12663,13 +12663,17 @@ function loadLayerLayout() {
     // ユーザーが個別に移動したレイヤー位置は変更しない。
     const layoutMigrationKey = "roadVideoLayerLayoutV6";
     if (!localStorage.getItem(layoutMigrationKey)) {
-      // 今回の初期配置更新では、保存済みの旧配置に関係なく
-      // TIMEを左17pxへ強制的に移行する。
+      // 現在時刻の保存済み位置は維持する。
+      // 旧版でleft（%扱い）として保存された値は位置が不明確なため、
+      // leftPxがない場合のみ初期位置へ正規化する。
       if (layerLayout.currentTime) {
-        layerLayout.currentTime.leftPx = 17;
-        layerLayout.currentTime.top = Number.isFinite(Number(layerLayout.currentTime.top))
-          ? Number(layerLayout.currentTime.top)
-          : 93.2;
+        if (!Number.isFinite(Number(layerLayout.currentTime.leftPx))) {
+          layerLayout.currentTime.leftPx = 17;
+        }
+        delete layerLayout.currentTime.left;
+        if (!Number.isFinite(Number(layerLayout.currentTime.top))) {
+          layerLayout.currentTime.top = 93.2;
+        }
       }
 
       // 気温はMAPの左端に合わせて初期配置する。
@@ -12770,9 +12774,9 @@ function applyLayerLayout() {
       layer.style.top = Number.isFinite(data.top) ? data.top + "%" : "auto";
       layer.style.bottom = Number.isFinite(data.top) ? "auto" : (data.bottom ?? 10) + "%";
       layer.style.width = (data.width ?? 50) + "%";
-      // 高さだけが固定pxだと、縦持ちで縮小された動画に対して
-      // グラフが縦長になりすぎるため、プレビュー幅に比例させる。
-      layer.style.height = ((data.height ?? 125) * graphScale) + "px";
+      // 横幅は動画幅に対する割合、縦幅は保存したpx値をそのまま使う。
+      // 動画切り替え時にresponsiveScaleを掛けると縦サイズだけ変わるため。
+      layer.style.height = (data.height ?? 125) + "px";
     } else if (key === "combinedProfileGraph") {
       const graphScale = getRightLayerResponsiveScale();
       layer.style.left = (data.left ?? 20) + "%";
@@ -12793,6 +12797,13 @@ function applyLayerLayout() {
         data.left = temperatureLeft;
         layer.style.left = Math.max(0, Math.min(92, temperatureLeft)) + "%";
         layer.style.fontSize = ((data.fontSize ?? 24) * getRightLayerResponsiveScale()) + "px";
+      } else if (key === "currentTime") {
+        // 現在時刻は左端からのpx指定。旧データにleft（%）しかない場合も
+        // 中央付近へ飛ばず、初期位置の17pxへ正規化する。
+        if (!Number.isFinite(Number(data.leftPx))) data.leftPx = 17;
+        delete data.left;
+        layer.style.left = data.leftPx + "px";
+        layer.style.fontSize = (data.fontSize ?? 24) + "px";
       } else if (Number.isFinite(data.leftPx)) {
         layer.style.left = data.leftPx + "px";
         layer.style.fontSize = (data.fontSize ?? 24) + "px";
