@@ -14708,17 +14708,26 @@ window.addEventListener("resize", () => {
       clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
       clone.setAttribute("width", "24");
       clone.setAttribute("height", "24");
-      // ブラウザCSSの「fill:none」がdata:image/svg+xml化すると失われるため、
-      // 書き出し用SVGへ明示的に引き継ぐ。これがないとpathの内部が黒塗りになる。
-      clone.setAttribute("fill", "none");
-      clone.setAttribute("stroke", color);
+      // プレビューと同じ「カラー塗り＋黒フチ」をSVG自体に明示する。
+      // 書き出し用data URIではページ側CSSが適用されないため、属性で再現する。
+      clone.setAttribute("fill", color);
+      clone.setAttribute("stroke", "#000000");
+      clone.setAttribute("stroke-width", "1.8");
+      clone.setAttribute("stroke-linecap", "round");
+      clone.setAttribute("stroke-linejoin", "round");
+      clone.setAttribute("paint-order", "stroke fill");
+      clone.setAttribute("overflow", "visible");
       clone.innerHTML = clone.innerHTML.replace(/currentColor/g, color);
       clone.querySelectorAll("*").forEach(node => {
-        if (node.getAttribute("stroke") === "currentColor" || !node.getAttribute("stroke")) node.setAttribute("stroke", color);
-        // 各アイコンはプレビュー同様の線画なので、内部塗りつぶしを禁止する。
-        if (!node.getAttribute("fill") || node.getAttribute("fill") === "currentColor") node.setAttribute("fill", "none");
-        const stroke = node.getAttribute("stroke");
-        if (stroke && stroke !== "none") node.setAttribute("stroke-width", String(Math.max(1.5, parseFloat(node.getAttribute("stroke-width") || "1") * 1.35)));
+        const tag = node.tagName.toLowerCase();
+        if (["path", "circle", "rect", "polygon", "ellipse"].includes(tag)) {
+          if (!node.getAttribute("fill") || node.getAttribute("fill") === "currentColor" || node.getAttribute("fill") === "none") node.setAttribute("fill", color);
+          node.setAttribute("stroke", "#000000");
+          node.setAttribute("stroke-width", "1.8");
+          node.setAttribute("stroke-linecap", "round");
+          node.setAttribute("stroke-linejoin", "round");
+          node.setAttribute("paint-order", "stroke fill");
+        }
       });
       const img = new Image();
       jobs.push(new Promise(resolve => {
