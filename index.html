@@ -12804,12 +12804,8 @@ function applyLayerLayout() {
     }
   });
 
-  // TIMEの初期位置は左17px。保存値の移行後も、描画時に明示的に反映する。
-  // （ユーザーが編集モードで移動した場合は、その後の編集処理で上書きされる。）
-  if (currentTimeMetric && layerLayout.currentTime && !layerEditMode) {
-    currentTimeMetric.style.left = "17px";
-    currentTimeMetric.style.top = (Number(layerLayout.currentTime.top) || 93.2) + "%";
-  }
+  // 保存済みレイアウトをそのまま使用する。
+  // 動画切替・表示サイズ更新のたびにTIMEの位置を初期値へ戻さない。
 
   resizePowerCanvas();
 }
