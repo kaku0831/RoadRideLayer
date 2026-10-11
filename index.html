@@ -6148,6 +6148,25 @@ function selectVideoClip(index, options = {}) {
 
     updateCustomVideoControls();
     updateOverlay();
+
+    // 複数動画では、現在選択中の動画が変わっても全レイヤーを
+    // 共通の保存済みレイアウトへ再適用する。
+    // 動画ごとの縦横比・表示サイズ更新後にも位置とサイズを揃える。
+    requestAnimationFrame(() => {
+      if (typeof updateVideoDisplaySize === "function") {
+        updateVideoDisplaySize();
+      }
+      if (typeof applyLayerLayout === "function") {
+        applyLayerLayout();
+      }
+      if (typeof resizePowerCanvas === "function") {
+        resizePowerCanvas();
+      }
+      if (typeof drawPowerGraph === "function") {
+        drawPowerGraph();
+      }
+    });
+
     updateTrimCurrentMarker(true);
     updateLapCurrentMarker();
     drawPowerGraph();
