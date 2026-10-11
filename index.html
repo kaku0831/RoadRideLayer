@@ -12776,14 +12776,14 @@ function applyLayerLayout() {
       // 縦サイズは保存したpx値をそのまま適用し、動画切替で変化させない。
       layer.style.height = (data.height ?? 125) + "px";
     } else if (key === "combinedProfileGraph") {
-      const graphScale = getRightLayerResponsiveScale();
       layer.style.left = (data.left ?? 20) + "%";
       layer.style.right = "auto";
       layer.style.top = (data.top ?? 68) + "%";
       layer.style.bottom = "auto";
       layer.style.width = (data.width ?? 60) + "%";
-      // 標高＋パワーグラフもパワーグラフと同じ縮尺で追従させる。
-      layer.style.height = ((data.height ?? 112) * graphScale) + "px";
+      // 標高＋パワーグラフの縦サイズも保存したpx値をそのまま適用する。
+      // 動画切り替え時の表示領域に応じた倍率で高さが変わらないようにする。
+      layer.style.height = (data.height ?? 112) + "px";
     } else {
       if (key === "temperature") {
         // 気温はMAPの左端と同じX座標に合わせる。
@@ -13380,10 +13380,9 @@ function updateLayerPinch(event) {
     if (overlayMap) requestAnimationFrame(() => overlayMap.invalidateSize(false));
     updateMapLayerControlsPosition();
   } else {
-    const graphScale = responsiveScale;
     layout.width = width / cw * 100;
-    // パワーグラフは保存値をpxとして扱う。複合グラフだけ従来の縮尺補正を維持。
-    layout.height = state.key === "powerGraph" ? height : height / graphScale;
+    // パワーグラフと標高＋パワーグラフは、縦サイズをpxで保存・復元する。
+    layout.height = height;
     state.layer.style.width = layout.width + "%";
     state.layer.style.height = height + "px";
     if (state.key === "powerGraph") {
