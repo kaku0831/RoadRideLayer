@@ -12658,17 +12658,17 @@ function loadLayerLayout() {
         ? saved
         : cloneDefaultLayerLayout();
 
-    // 初期配置の更新。
-    // 直前の初期値のまま保存されている場合だけ、新しい基準配置へ移行し、
-    // ユーザーが個別に移動したレイヤー位置は変更しない。
+    // レイアウト移行。ユーザーが保存したTIME位置は上書きしない。
     const layoutMigrationKey = "roadVideoLayerLayoutV6";
     if (!localStorage.getItem(layoutMigrationKey)) {
-      // 現在時刻の保存済み位置は維持する。
-      // 旧版でleft（%扱い）として保存された値は位置が不明確なため、
-      // leftPxがない場合のみ初期位置へ正規化する。
       if (layerLayout.currentTime) {
+        // 旧版では横位置がleftにpx値として誤保存されることがあった。
+        // leftPxがない場合だけ旧leftを引き継ぎ、なければ初期値を使う。
         if (!Number.isFinite(Number(layerLayout.currentTime.leftPx))) {
-          layerLayout.currentTime.leftPx = 17;
+          layerLayout.currentTime.leftPx =
+            Number.isFinite(Number(layerLayout.currentTime.left))
+              ? Number(layerLayout.currentTime.left)
+              : 17;
         }
         delete layerLayout.currentTime.left;
         if (!Number.isFinite(Number(layerLayout.currentTime.top))) {
@@ -12768,14 +12768,12 @@ function applyLayerLayout() {
       }
 
     } else if (key === "powerGraph") {
-      const graphScale = getRightLayerResponsiveScale();
       layer.style.left = Number.isFinite(data.left) ? data.left + "%" : "auto";
       layer.style.right = Number.isFinite(data.left) ? "auto" : (data.right ?? 2) + "%";
       layer.style.top = Number.isFinite(data.top) ? data.top + "%" : "auto";
       layer.style.bottom = Number.isFinite(data.top) ? "auto" : (data.bottom ?? 10) + "%";
       layer.style.width = (data.width ?? 50) + "%";
-      // 横幅は動画幅に対する割合、縦幅は保存したpx値をそのまま使う。
-      // 動画切り替え時にresponsiveScaleを掛けると縦サイズだけ変わるため。
+      // 縦サイズは保存したpx値をそのまま適用し、動画切替で変化させない。
       layer.style.height = (data.height ?? 125) + "px";
     } else if (key === "combinedProfileGraph") {
       const graphScale = getRightLayerResponsiveScale();
@@ -12798,9 +12796,9 @@ function applyLayerLayout() {
         layer.style.left = Math.max(0, Math.min(92, temperatureLeft)) + "%";
         layer.style.fontSize = ((data.fontSize ?? 24) * getRightLayerResponsiveScale()) + "px";
       } else if (key === "currentTime") {
-        // 現在時刻は左端からのpx指定。旧データにleft（%）しかない場合も
-        // 中央付近へ飛ばず、初期位置の17pxへ正規化する。
-        if (!Number.isFinite(Number(data.leftPx))) data.leftPx = 17;
+        if (!Number.isFinite(Number(data.leftPx))) {
+          data.leftPx = Number.isFinite(Number(data.left)) ? Number(data.left) : 17;
+        }
         delete data.left;
         layer.style.left = data.leftPx + "px";
         layer.style.fontSize = (data.fontSize ?? 24) + "px";
@@ -12814,9 +12812,6 @@ function applyLayerLayout() {
       layer.style.top = (data.top ?? 4) + "%";
     }
   });
-
-  // 保存済みレイアウトをそのまま使用する。
-  // 動画切替・表示サイズ更新のたびにTIMEの位置を初期値へ戻さない。
 
   resizePowerCanvas();
 }
@@ -12967,19 +12962,17 @@ function applyLayerPixelPosition(layer, key, leftPx, topPx, cw, ch) {
     layer.style.left = layout.left + "%";
     layer.style.top = layout.top + "%";
   } else if (key === "temperature") {
-    // 気温レイヤーは右側配置なので、横位置を動画幅に対する%で保存する。
+    // 気温はMAPに合わせた相対位置（%）で管理する。
     layout.left = leftPx / cw * 100;
     layout.top = topPx / ch * 100;
     delete layout.leftPx;
     layer.style.left = layout.left + "%";
     layer.style.top = layout.top + "%";
   } else {
-    // 左側の数値レイヤーは横位置をpxで保存する。
-    // leftにpx値を入れると、applyLayerLayout()で%として解釈されて
-    // 動画切替時に初期位置へ戻ったように見えるため、leftPxを維持する。
+    // 数値レイヤーは横位置をpxとして保存し、復元時もpxで適用する。
     layout.leftPx = leftPx;
-    layout.top = topPx / ch * 100;
     delete layout.left;
+    layout.top = topPx / ch * 100;
     layer.style.left = layout.leftPx + "px";
     layer.style.top = layout.top + "%";
   }
@@ -13389,7 +13382,8 @@ function updateLayerPinch(event) {
   } else {
     const graphScale = responsiveScale;
     layout.width = width / cw * 100;
-    layout.height = height / graphScale;
+    // パワーグラフは保存値をpxとして扱う。複合グラフだけ従来の縮尺補正を維持。
+    layout.height = state.key === "powerGraph" ? height : height / graphScale;
     state.layer.style.width = layout.width + "%";
     state.layer.style.height = height + "px";
     if (state.key === "powerGraph") {
